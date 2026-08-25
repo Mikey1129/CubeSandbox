@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/cubemasterclient"
+	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/leader"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/lifecycle"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/registry"
 )
@@ -131,23 +132,30 @@ type fakePush struct {
 	mu      sync.Mutex
 	pushed  map[string][]string // sandbox_id -> ordered list of states
 	deleted []string            // sandbox_ids passed to DeleteMeta
+	epochs  []uint64
 }
 
 func newFakePush() *fakePush {
 	return &fakePush{pushed: make(map[string][]string)}
 }
 
-func (f *fakePush) SetState(_ context.Context, sid, state string) error {
+func (f *fakePush) SetState(ctx context.Context, sid, state string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pushed[sid] = append(f.pushed[sid], state)
+	if epoch, ok := leader.EpochFromContext(ctx); ok {
+		f.epochs = append(f.epochs, epoch)
+	}
 	return nil
 }
 
-func (f *fakePush) DeleteMeta(_ context.Context, sid string) error {
+func (f *fakePush) DeleteMeta(ctx context.Context, sid string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, sid)
+	if epoch, ok := leader.EpochFromContext(ctx); ok {
+		f.epochs = append(f.epochs, epoch)
+	}
 	return nil
 }
 
@@ -185,6 +193,12 @@ func newTestSweeper(reg *registry.Registry, store *fakeStore, master *fakeMaster
 	})
 }
 
+type stubLeaderStatus bool
+
+func (s stubLeaderStatus) IsLeader() bool { return bool(s) }
+func (s stubLeaderStatus) Enabled() bool  { return true }
+func (s stubLeaderStatus) Epoch() uint64  { return 7 }
+
 // seedEntry inserts a registry entry. Unlike the previous grace-period
 // design, the sweeper now bases its idle decision on max(LastActiveMs,
 // CreatedAt), so test cases just need to set those fields appropriately.
@@ -195,6 +209,29 @@ func seedEntry(t *testing.T, r *registry.Registry, meta lifecycle.SandboxLifecyc
 		if !r.MergeLastActive(meta.SandboxID, lastActiveMs) {
 			t.Fatalf("seed: MergeLastActive(%s, %d) didn't advance", meta.SandboxID, lastActiveMs)
 		}
+	}
+}
+
+func TestSweeper_StandbySkipsIdleWork(t *testing.T) {
+	reg := registry.New()
+	store := newFakeStore()
+	master := &fakeMaster{}
+	push := newFakePush()
+	now := time.Now()
+	seedEntry(t, reg, lifecycle.SandboxLifecycleMeta{
+		SandboxID: "sbx-standby", InstanceType: "cubebox",
+		AutoPause: true, TimeoutSeconds: lifecycle.TimeoutSecondsPtr(1),
+	}, now.Add(-time.Minute).UnixMilli())
+
+	s := newTestSweeper(reg, store, master, push, now)
+	s.o.Leader = stubLeaderStatus(false)
+	s.sweepOnce(context.Background())
+
+	if len(master.calls) != 0 {
+		t.Fatalf("standby must not pause sandboxes: %v", master.calls)
+	}
+	if got := store.state("sbx-standby"); got != "" {
+		t.Fatalf("standby must not mutate state, got %q", got)
 	}
 }
 
@@ -227,6 +264,32 @@ func TestSweeper_PausesIdleSandbox(t *testing.T) {
 	triggered, failed := s.Stats()
 	if triggered != 1 || failed != 0 {
 		t.Fatalf("stats: triggered=%d failed=%d", triggered, failed)
+	}
+}
+
+func TestSweeper_LeaderWritesCarryFencingEpoch(t *testing.T) {
+	reg := registry.New()
+	store := newFakeStore()
+	master := &fakeMaster{}
+	push := newFakePush()
+	s := newTestSweeper(reg, store, master, push, time.Now())
+	s.o.Leader = stubLeaderStatus(true)
+	entry := registry.Entry{Meta: lifecycle.SandboxLifecycleMeta{
+		SandboxID: "sbx", InstanceType: "cubebox", AutoPause: true,
+	}}
+
+	if err := s.tryPause(context.Background(), entry); err != nil {
+		t.Fatal(err)
+	}
+	push.mu.Lock()
+	defer push.mu.Unlock()
+	if len(push.epochs) == 0 {
+		t.Fatal("sweeper push omitted leader fencing epoch")
+	}
+	for _, epoch := range push.epochs {
+		if epoch != 7 {
+			t.Fatalf("push epoch = %d, want 7", epoch)
+		}
 	}
 }
 

@@ -32,3 +32,17 @@ func TestEventChannel(t *testing.T) {
 		t.Fatalf("EventChannel = %q, want %q", EventChannel, want)
 	}
 }
+
+func TestLeaderLeaseKey(t *testing.T) {
+	const want = "cube:v1:shared:lock:lifecycle-manager:leader"
+	if LeaderLeaseKey != want {
+		t.Fatalf("LeaderLeaseKey = %q, want %q", LeaderLeaseKey, want)
+	}
+}
+
+func TestLeaderEpochKey(t *testing.T) {
+	const want = "cube:v1:shared:lifecycle-manager:leader-epoch"
+	if LeaderEpochKey != want {
+		t.Fatalf("LeaderEpochKey = %q, want %q", LeaderEpochKey, want)
+	}
+}

@@ -42,3 +42,10 @@ Overrides:
 
 All configuration is via environment variables (prefix `CUBE_LCM_`); see
 `internal/config/config.go` for the authoritative list.
+
+Kubernetes deployments run two warm replicas with Redis-backed leader
+election. Both replicas consume lifecycle events and serve resume requests;
+only the leader performs idle sweep/kill and stale CubeProxy pruning.
+Leader election uses `SET NX PX` plus single-key `WATCH` transactions (no
+Lua/EVAL). Host Docker/systemd deployments leave election disabled and retain
+single-instance behavior.

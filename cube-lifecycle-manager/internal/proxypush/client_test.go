@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/discovery"
+	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/leader"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/lifecycle"
 )
 
@@ -227,6 +228,24 @@ func TestUpsertMeta_TokenHeader(t *testing.T) {
 	}
 	if fa.missingT != 1 {
 		t.Fatalf("expected exactly 1 missing-token rejection, got %d", fa.missingT)
+	}
+}
+
+func TestUpsertMeta_LeaderEpochHeader(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Cube-Leader-Epoch")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	client := New([]string{srv.URL}, "", time.Second, zap.NewNop())
+	ctx := leader.WithEpoch(context.Background(), 42)
+	if err := client.UpsertMeta(ctx, lifecycle.SandboxLifecycleMeta{SandboxID: "sbx"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "42" {
+		t.Fatalf("X-Cube-Leader-Epoch = %q, want 42", got)
 	}
 }
 

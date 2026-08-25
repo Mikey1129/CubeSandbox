@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/discovery"
+	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/leader"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/lifecycle"
 )
 
@@ -235,6 +236,9 @@ func (c *Client) do(ctx context.Context, method, base, path string, body []byte)
 	}
 	if c.token != "" {
 		req.Header.Set("X-Cube-Admin-Token", c.token)
+	}
+	if epoch, ok := leader.EpochFromContext(ctx); ok {
+		req.Header.Set("X-Cube-Leader-Epoch", strconv.FormatUint(epoch, 10))
 	}
 
 	resp, err := c.httpc.Do(req)
