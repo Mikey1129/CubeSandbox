@@ -116,15 +116,15 @@ func TestReadBroadcastAdvancesPastMalformedEvent(t *testing.T) {
 	rdb := &stubRedis{
 		xoldest: []redis.XMessage{{ID: "9-0"}},
 		xread: []redis.XStream{{
-		Stream: lifecycle.EventStreamKey,
-		Messages: []redis.XMessage{
-			{ID: "10-0", Values: map[string]interface{}{lifecycle.FieldOp: lifecycle.OpCreate}},
-			{ID: "11-0", Values: map[string]interface{}{
-				lifecycle.FieldOp:        lifecycle.OpDelete,
-				lifecycle.FieldSandboxID: "sbx",
-			}},
-		},
-	}}}
+			Stream: lifecycle.EventStreamKey,
+			Messages: []redis.XMessage{
+				{ID: "10-0", Values: map[string]interface{}{lifecycle.FieldOp: lifecycle.OpCreate}},
+				{ID: "11-0", Values: map[string]interface{}{
+					lifecycle.FieldOp:        lifecycle.OpDelete,
+					lifecycle.FieldSandboxID: "sbx",
+				}},
+			},
+		}}}
 	client := New(rdb, zap.NewNop())
 
 	events, cursor, err := client.Read(context.Background(), "9-0", time.Second, 100)
