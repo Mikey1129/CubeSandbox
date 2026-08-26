@@ -39,10 +39,3 @@ func TestLeaderLeaseKey(t *testing.T) {
 		t.Fatalf("LeaderLeaseKey = %q, want %q", LeaderLeaseKey, want)
 	}
 }
-
-func TestLeaderEpochKey(t *testing.T) {
-	const want = "cube:v1:shared:lifecycle-manager:leader-epoch"
-	if LeaderEpochKey != want {
-		t.Fatalf("LeaderEpochKey = %q, want %q", LeaderEpochKey, want)
-	}
-}

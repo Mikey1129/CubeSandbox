@@ -45,49 +45,6 @@ local function check_token()
     end
 end
 
--- Leader-only CLM writes carry a monotonically increasing Redis-backed epoch.
--- Holding a shared-dict lock through the mutation ensures an in-flight request
--- from an expired leader cannot overwrite a newer leader's replay. Requests
--- without the header are active-active resume/bookkeeping calls and retain the
--- existing behavior.
-local function acquire_leader_epoch()
-    local raw = ngx.var.http_x_cube_leader_epoch
-    if not raw or raw == "" then
-        return function() end
-    end
-    local epoch = tonumber(raw)
-    if not epoch or epoch < 1 or epoch ~= math.floor(epoch) then
-        reply_error(ngx.HTTP_BAD_REQUEST, "invalid X-Cube-Leader-Epoch")
-    end
-
-    local cache = ngx.shared.local_cache
-    if not cache then
-        reply_error(ngx.HTTP_INTERNAL_SERVER_ERROR, "local_cache unavailable")
-    end
-    local lock_key = "cube_lcm_leader_epoch_lock"
-    local locked = false
-    for _ = 1, 50 do
-        locked = cache:add(lock_key, true, 1)
-        if locked then break end
-        ngx.sleep(0.001)
-    end
-    if not locked then
-        reply_error(ngx.HTTP_SERVICE_UNAVAILABLE, "leader epoch lock busy")
-    end
-
-    local current = tonumber(cache:get("cube_lcm_leader_epoch")) or 0
-    if epoch < current then
-        cache:delete(lock_key)
-        reply_error(ngx.HTTP_CONFLICT, "stale leader epoch")
-    end
-    if epoch > current then
-        cache:set("cube_lcm_leader_epoch", epoch)
-    end
-    return function()
-        cache:delete(lock_key)
-    end
-end
-
 local function read_json_body()
     ngx.req.read_body()
     local raw = ngx.req.get_body_data()
@@ -126,10 +83,8 @@ local function handle_meta_upsert()
     local sid, e2 = require_string(obj, "sandbox_id")
     if not sid then return reply_error(ngx.HTTP_BAD_REQUEST, e2) end
 
-    local release_epoch = acquire_leader_epoch()
     local payload = cjson.encode(obj)
     local ok, set_err, forcible = META:set(sid, payload)
-    release_epoch()
     if not ok then
         return reply_error(ngx.HTTP_INTERNAL_SERVER_ERROR,
             "meta set failed: " .. tostring(set_err))
@@ -151,14 +106,12 @@ local function handle_meta_delete()
     local sid, e2 = require_string(obj, "sandbox_id")
     if not sid then return reply_error(ngx.HTTP_BAD_REQUEST, e2) end
 
-    local release_epoch = acquire_leader_epoch()
     -- Invalidate fixed route metadata so the next data-plane request reloads
     -- the sandbox route from Redis.
     local deleted = backend_cache.invalidate_sandbox(sid)
     META:delete(sid)
     STATE:delete(sid)
     LAST:delete(sid)
-    release_epoch()
     return reply(ngx.HTTP_OK, { ok = true, backend_cache_deleted = deleted })
 end
 
@@ -191,9 +144,7 @@ local function handle_state()
             "state must be one of running|pausing|paused")
     end
 
-    local release_epoch = acquire_leader_epoch()
     local ok, set_err, forcible = STATE:set(sid, st)
-    release_epoch()
     if not ok then
         return reply_error(ngx.HTTP_INTERNAL_SERVER_ERROR,
             "state set failed: " .. tostring(set_err))

@@ -441,8 +441,10 @@ lease uses single-key Redis transactions and requires no Kubernetes RBAC.
 Production deployments should pair this with Sentinel or managed HA Redis;
 the chart's built-in single-replica Redis remains a shared failure point.
 Because Redis replication is asynchronous, a Redis failover does not provide
-strict fencing for an already in-flight leader operation; CLM's local lease
-deadline and per-sandbox locks bound and reconcile that window.
+strict fencing for an already in-flight leader operation. The new leader
+catches up the event stream, waits one CubeProxy HTTP timeout so those
+in-flight writes can finish, then catches up again before running singleton
+work. Local lease deadlines and per-sandbox locks bound the remaining window.
 
 ### Production TLS Secret
 

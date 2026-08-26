@@ -18,16 +18,13 @@ func TestRedisLeaseStoreTokenSafeRenewAndRelease(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	ctx := context.Background()
-	store := redisLeaseStore{rdb: client, key: "lease", fencingKey: "epoch"}
+	store := redisLeaseStore{rdb: client, key: "lease"}
 	acquired, err := store.Acquire(ctx, "owner-a", 10*time.Second)
 	if err != nil || !acquired {
 		t.Fatalf("Acquire() = (%v, %v), want (true, nil)", acquired, err)
 	}
 	if acquired, err = store.Acquire(ctx, "owner-b", 10*time.Second); err != nil || acquired {
 		t.Fatalf("second Acquire() = (%v, %v), want (false, nil)", acquired, err)
-	}
-	if epoch, err := store.NextEpoch(ctx); err != nil || epoch != 1 {
-		t.Fatalf("NextEpoch() = (%d, %v), want (1, nil)", epoch, err)
 	}
 
 	server.FastForward(8 * time.Second)

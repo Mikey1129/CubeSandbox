@@ -47,5 +47,9 @@ Kubernetes deployments run two warm replicas with Redis-backed leader
 election. Both replicas consume lifecycle events and serve resume requests;
 only the leader performs idle sweep/kill and stale CubeProxy pruning.
 Leader election uses `SET NX PX` plus single-key `WATCH` transactions (no
-Lua/EVAL). Host Docker/systemd deployments leave election disabled and retain
+Lua/EVAL). After acquiring the lease the new leader catches up the event
+stream, waits one CubeProxy HTTP timeout so in-flight writes from the
+previous leader can finish, catches up again, then starts singleton work.
+Hydrating CubeProxy dicts is best-effort and does not gate leadership.
+Host Docker/systemd deployments leave election disabled and retain
 single-instance behavior.

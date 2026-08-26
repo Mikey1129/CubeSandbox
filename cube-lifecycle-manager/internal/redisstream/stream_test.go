@@ -113,7 +113,9 @@ func TestLatestID(t *testing.T) {
 }
 
 func TestReadBroadcastAdvancesPastMalformedEvent(t *testing.T) {
-	rdb := &stubRedis{xread: []redis.XStream{{
+	rdb := &stubRedis{
+		xoldest: []redis.XMessage{{ID: "9-0"}},
+		xread: []redis.XStream{{
 		Stream: lifecycle.EventStreamKey,
 		Messages: []redis.XMessage{
 			{ID: "10-0", Values: map[string]interface{}{lifecycle.FieldOp: lifecycle.OpCreate}},
@@ -174,6 +176,14 @@ func TestZeroCursorDetectsTrimmedHistory(t *testing.T) {
 	valid, err := client.CursorValid(context.Background(), "0-0")
 	if err != nil || valid {
 		t.Fatalf("CursorValid(0-0 after trim) = (%v, %v), want (false, nil)", valid, err)
+	}
+}
+
+func TestNonZeroCursorRejectsEmptyStream(t *testing.T) {
+	client := New(&stubRedis{}, zap.NewNop())
+	valid, err := client.CursorValid(context.Background(), "9-0")
+	if err != nil || valid {
+		t.Fatalf("CursorValid(nonzero, empty stream) = (%v, %v), want (false, nil)", valid, err)
 	}
 }
 

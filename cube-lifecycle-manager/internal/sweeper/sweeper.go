@@ -237,11 +237,10 @@ func (s *Sweeper) tryPause(ctx context.Context, e registry.Entry) error {
 		// Another sidecar (or our own resume handler) holds the state. Skip.
 		return nil
 	}
-	pushCtx := leader.WithStatusEpoch(ctx, s.o.Leader)
 
 	// Tell CubeProxy first that the sandbox is pausing, so any new requests
 	// hit the 503 retry path immediately and don't race the rpc.
-	if err := s.o.ProxyPush.SetState(pushCtx, sid, "pausing"); err != nil {
+	if err := s.o.ProxyPush.SetState(ctx, sid, "pausing"); err != nil {
 		s.o.Log.Warn("push pausing state failed",
 			zap.String("sandbox_id", sid), zap.Error(err))
 		// Continue anyway — the rpc and final state push are still useful.
@@ -255,7 +254,7 @@ func (s *Sweeper) tryPause(ctx context.Context, e registry.Entry) error {
 			// Sandbox doesn't exist on CubeMaster anymore. Clean up local
 			// state and stop chasing it.
 			_ = s.o.Redis.ClearStateNotify(ctx, sid)
-			_ = s.o.ProxyPush.DeleteMeta(pushCtx, sid)
+			_ = s.o.ProxyPush.DeleteMeta(ctx, sid)
 			s.o.Registry.Delete(sid)
 			s.o.Log.Info("sandbox not found on cubemaster; evicting from registry",
 				zap.String("sandbox_id", sid),
@@ -277,7 +276,7 @@ func (s *Sweeper) tryPause(ctx context.Context, e registry.Entry) error {
 			// sweep can retry, and tell CubeProxy the sandbox is back to
 			// running (it never actually paused).
 			_ = s.o.Redis.ClearStateNotify(ctx, sid)
-			_ = s.o.ProxyPush.SetState(pushCtx, sid, "running")
+			_ = s.o.ProxyPush.SetState(ctx, sid, "running")
 			return errors.New("cubemaster pause: " + pauseErr.Error())
 		}
 	}
@@ -287,7 +286,7 @@ func (s *Sweeper) tryPause(ctx context.Context, e registry.Entry) error {
 			zap.String("sandbox_id", sid), zap.Error(err))
 	}
 	s.o.Registry.SetRuntimeState(sid, lifecycle.StatePaused)
-	if err := s.o.ProxyPush.SetState(pushCtx, sid, "paused"); err != nil {
+	if err := s.o.ProxyPush.SetState(ctx, sid, "paused"); err != nil {
 		s.o.Log.Warn("push paused state failed",
 			zap.String("sandbox_id", sid), zap.Error(err))
 	}
@@ -328,9 +327,8 @@ func (s *Sweeper) tryKill(ctx context.Context, e registry.Entry) error {
 		// Skip — the holder will drive the transition.
 		return nil
 	}
-	pushCtx := leader.WithStatusEpoch(ctx, s.o.Leader)
 
-	if err := s.o.ProxyPush.SetState(pushCtx, sid, "killing"); err != nil {
+	if err := s.o.ProxyPush.SetState(ctx, sid, "killing"); err != nil {
 		s.o.Log.Warn("push killing state failed",
 			zap.String("sandbox_id", sid), zap.Error(err))
 	}
@@ -350,7 +348,7 @@ func (s *Sweeper) tryKill(ctx context.Context, e registry.Entry) error {
 				zap.Int("ret_code", apiErr.RetCode))
 		default:
 			_ = s.o.Redis.ClearStateNotify(ctx, sid)
-			_ = s.o.ProxyPush.SetState(pushCtx, sid, "running")
+			_ = s.o.ProxyPush.SetState(ctx, sid, "running")
 			return errors.New("cubemaster kill: " + killErr.Error())
 		}
 	}
@@ -359,7 +357,7 @@ func (s *Sweeper) tryKill(ctx context.Context, e registry.Entry) error {
 		s.o.Log.Warn("write killed state failed",
 			zap.String("sandbox_id", sid), zap.Error(err))
 	}
-	if err := s.o.ProxyPush.DeleteMeta(pushCtx, sid); err != nil {
+	if err := s.o.ProxyPush.DeleteMeta(ctx, sid); err != nil {
 		s.o.Log.Warn("delete meta after kill failed",
 			zap.String("sandbox_id", sid), zap.Error(err))
 	}

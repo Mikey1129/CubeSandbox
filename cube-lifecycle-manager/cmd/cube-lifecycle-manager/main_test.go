@@ -6,6 +6,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +17,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/discovery"
+	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/leader"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/lifecycle"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/proxypush"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/redisstream"
@@ -109,5 +115,181 @@ func TestResolvePromotionStatePrefersSharedRedis(t *testing.T) {
 	state, err = resolvePromotionState(ctx, stream, entry)
 	if err != nil || state != lifecycle.StatePaused {
 		t.Fatalf("fallback resolvePromotionState() = (%q, %v), want paused", state, err)
+	}
+}
+
+func TestReconciledLeaderDisabledElectionIgnoresGeneration(t *testing.T) {
+	lease := leader.New(leader.Options{Enabled: false, Identity: "single", Log: zap.NewNop()})
+	active := &reconciledLeader{lease: lease}
+	if !active.IsLeader() {
+		t.Fatal("disabled election must not wait for stream catch-up")
+	}
+	active.invalidate()
+	if !active.IsLeader() {
+		t.Fatal("invalidate must not demote a disabled-election replica")
+	}
+}
+
+func TestRebuildRegistryAfterTrimPreservesActivityAndReadsCursorFirst(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	ctx := context.Background()
+	stream := redisstream.New(rdb, zap.NewNop())
+
+	meta := lifecycle.SandboxLifecycleMeta{SandboxID: "sbx"}
+	payload, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.HSet(ctx, lifecycle.MetaKey, "sbx", payload).Err(); err != nil {
+		t.Fatal(err)
+	}
+	addCreate := func(id string) {
+		t.Helper()
+		if err := rdb.XAdd(ctx, &redis.XAddArgs{
+			Stream: lifecycle.EventStreamKey,
+			ID:     id,
+			Values: map[string]interface{}{
+				lifecycle.FieldOp:        lifecycle.OpCreate,
+				lifecycle.FieldSandboxID: "sbx",
+				lifecycle.FieldPayload:   string(payload),
+				lifecycle.FieldTimestamp: time.Now().UnixMilli(),
+			},
+		}).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addCreate("1-0")
+	addCreate("2-0")
+
+	startupTs := time.Unix(1_700_000_000, 0)
+	reg := registry.New()
+	reg.Upsert(meta)
+	reg.MergeLastActive("sbx", 42)
+	reg.SetRuntimeState("sbx", lifecycle.StatePaused)
+	progress := newStreamProgress("0-0")
+
+	if err := rebuildRegistryAfterTrim(ctx, stream, reg, progress, startupTs, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	got := reg.Get("sbx")
+	if got == nil {
+		t.Fatal("rebuild dropped sandbox still present in the Hash")
+	}
+	if got.LastActiveMs != 42 {
+		t.Fatalf("LastActiveMs = %d, want 42", got.LastActiveMs)
+	}
+	if got.RuntimeState != lifecycle.StatePaused {
+		t.Fatalf("RuntimeState = %q, want paused", got.RuntimeState)
+	}
+	if !got.FirstSeenAt.Equal(startupTs) {
+		t.Fatalf("FirstSeenAt = %v, want startupTs %v", got.FirstSeenAt, startupTs)
+	}
+	if progress.Cursor() != "2-0" {
+		t.Fatalf("cursor = %q, want 2-0 from LatestID before HGETALL", progress.Cursor())
+	}
+}
+
+func TestReplayRegistryToPushesPausedState(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	var states []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/admin/state" {
+			var payload map[string]string
+			_ = json.Unmarshal(body, &payload)
+			states = append(states, payload["state"])
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	stream := redisstream.New(rdb, zap.NewNop())
+	reg := registry.New()
+	reg.Upsert(lifecycle.SandboxLifecycleMeta{SandboxID: "sbx"})
+	reg.SetRuntimeState("sbx", lifecycle.StatePaused)
+	push := proxypush.New([]string{ts.URL}, "", time.Second, zap.NewNop())
+	ep := discovery.Endpoint{ProxyID: "p", AdminURL: ts.URL}
+
+	if !replayRegistryTo(context.Background(), push, stream, reg, ep, zap.NewNop()) {
+		t.Fatal("replayRegistryTo failed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 2 || paths[0] != "/admin/meta/upsert" || paths[1] != "/admin/state" {
+		t.Fatalf("paths = %v, want [upsert, state]", paths)
+	}
+	if len(states) != 1 || states[0] != lifecycle.StatePaused {
+		t.Fatalf("states = %v, want [paused]", states)
+	}
+}
+
+func TestReconcileOnLeadershipDoesNotWaitForFleetHTTP(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	lease := leader.New(leader.Options{
+		Redis:         rdb,
+		Key:           "lease",
+		Identity:      "promoted",
+		Enabled:       true,
+		TTL:           2 * time.Second,
+		RenewInterval: 200 * time.Millisecond,
+		RetryInterval: 20 * time.Millisecond,
+		Log:           zap.NewNop(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = lease.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !lease.IsLeader() {
+		if time.Now().After(deadline) {
+			t.Fatal("lease was not acquired")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	reg := registry.New()
+	reg.Upsert(lifecycle.SandboxLifecycleMeta{SandboxID: "sbx"})
+	active := &reconciledLeader{lease: lease}
+	if active.IsLeader() {
+		t.Fatal("executable leadership must wait for stream catch-up")
+	}
+
+	stream := redisstream.New(rdb, zap.NewNop())
+	progress := newStreamProgress("0-0")
+	fleet := discovery.NewStatic([]string{ts.URL})
+	push := proxypush.NewWithFleet(fleet, "", time.Second, zap.NewNop())
+	var mu sync.Mutex
+	deps := statesync.Deps{Registry: reg, Leader: active, Log: zap.NewNop()}
+	go func() {
+		_ = reconcileOnLeadership(
+			ctx, lease, active, stream, push, reg, fleet, deps, progress, &mu,
+			10*time.Millisecond, 0, zap.NewNop(),
+		)
+	}()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for !active.IsLeader() {
+		if time.Now().After(deadline) {
+			t.Fatal("leadership stayed blocked on CubeProxy hydrate failure")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -23,7 +23,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/discovery"
-	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/leader"
 	"github.com/tencentcloud/CubeSandbox/cube-lifecycle-manager/internal/lifecycle"
 )
 
@@ -89,6 +88,19 @@ func (c *Client) UpsertMetaTo(ctx context.Context, adminURL string, meta lifecyc
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 	_, err = c.do(ctx, http.MethodPost, adminURL, "/admin/meta/upsert", body)
+	return err
+}
+
+// SetStateTo pushes a state transition to a single admin URL.
+func (c *Client) SetStateTo(ctx context.Context, adminURL, sandboxID, state string) error {
+	body, err := json.Marshal(map[string]string{
+		"sandbox_id": sandboxID,
+		"state":      state,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal state: %w", err)
+	}
+	_, err = c.do(ctx, http.MethodPost, adminURL, "/admin/state", body)
 	return err
 }
 
@@ -236,9 +248,6 @@ func (c *Client) do(ctx context.Context, method, base, path string, body []byte)
 	}
 	if c.token != "" {
 		req.Header.Set("X-Cube-Admin-Token", c.token)
-	}
-	if epoch, ok := leader.EpochFromContext(ctx); ok {
-		req.Header.Set("X-Cube-Leader-Epoch", strconv.FormatUint(epoch, 10))
 	}
 
 	resp, err := c.httpc.Do(req)

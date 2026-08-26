@@ -9,7 +9,6 @@ package leader
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -21,30 +20,6 @@ import (
 var errNotOwner = errors.New("leader lease not owned")
 var errLeaseExpired = errors.New("local leader lease deadline expired")
 
-type epochContextKey struct{}
-
-// WithEpoch marks a leader-only outbound write with its fencing generation.
-func WithEpoch(ctx context.Context, epoch uint64) context.Context {
-	if epoch == 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, epochContextKey{}, epoch)
-}
-
-// EpochFromContext returns the fencing generation attached by WithEpoch.
-func EpochFromContext(ctx context.Context) (uint64, bool) {
-	epoch, ok := ctx.Value(epochContextKey{}).(uint64)
-	return epoch, ok && epoch > 0
-}
-
-// WithStatusEpoch attaches an epoch when status exposes one.
-func WithStatusEpoch(ctx context.Context, status Status) context.Context {
-	if provider, ok := status.(interface{ Epoch() uint64 }); ok {
-		return WithEpoch(ctx, provider.Epoch())
-	}
-	return ctx
-}
-
 // Status is the read-only role view injected into CLM components.
 type Status interface {
 	IsLeader() bool
@@ -55,7 +30,6 @@ type Status interface {
 type Options struct {
 	Redis         redis.UniversalClient
 	Key           string
-	FencingKey    string
 	Identity      string
 	Enabled       bool
 	TTL           time.Duration
@@ -71,7 +45,6 @@ type Lease struct {
 	token      string
 	leader     atomic.Bool
 	generation atomic.Uint64
-	epoch      atomic.Uint64
 	deadline   atomic.Pointer[time.Time]
 	enabled    bool
 	store      leaseStore
@@ -83,20 +56,16 @@ func New(o Options) *Lease {
 	if o.Log == nil {
 		o.Log = zap.NewNop()
 	}
-	if o.FencingKey == "" {
-		o.FencingKey = o.Key + ":epoch"
-	}
 	token := o.Identity + ":" + uuid.NewString()
 	l := &Lease{
 		o:       o,
 		token:   token,
 		enabled: o.Enabled,
-		store:   redisLeaseStore{rdb: o.Redis, key: o.Key, fencingKey: o.FencingKey},
+		store:   redisLeaseStore{rdb: o.Redis, key: o.Key},
 	}
 	if !o.Enabled {
 		l.leader.Store(true)
 		l.generation.Store(1)
-		l.epoch.Store(1)
 	}
 	return l
 }
@@ -119,12 +88,8 @@ func (l *Lease) IsLeader() bool {
 
 func (l *Lease) Enabled() bool { return l.enabled }
 
-// Epoch is the monotonic fencing generation for leader-only CubeProxy writes.
-func (l *Lease) Epoch() uint64 { return l.epoch.Load() }
-
 // Generation increments after every successful acquisition. It allows
-// callers to run one-time reconciliation before using a newly promoted
-// replica's warm state.
+// callers to run one-time catch-up before using a newly promoted replica.
 func (l *Lease) Generation() uint64 { return l.generation.Load() }
 
 // Role returns the operator-facing role name.
@@ -198,15 +163,10 @@ func (l *Lease) acquire(ctx context.Context) (bool, error) {
 	if err != nil || !acquired {
 		return acquired, err
 	}
-	epoch, err := l.store.NextEpoch(opCtx)
-	if err != nil {
-		_ = l.store.Release(opCtx, l.token)
-		return false, err
-	}
 	if !l.setDeadline(started) {
+		_ = l.store.Release(opCtx, l.token)
 		return false, errLeaseExpired
 	}
-	l.epoch.Store(epoch)
 	return true, nil
 }
 
@@ -283,27 +243,17 @@ func (l *Lease) operationContext(parent context.Context) (context.Context, conte
 
 type leaseStore interface {
 	Acquire(ctx context.Context, token string, ttl time.Duration) (bool, error)
-	NextEpoch(ctx context.Context) (uint64, error)
 	Renew(ctx context.Context, token string, ttl time.Duration) (bool, error)
 	Release(ctx context.Context, token string) error
 }
 
 type redisLeaseStore struct {
-	rdb        redis.UniversalClient
-	key        string
-	fencingKey string
+	rdb redis.UniversalClient
+	key string
 }
 
 func (s redisLeaseStore) Acquire(ctx context.Context, token string, ttl time.Duration) (bool, error) {
 	return s.rdb.SetNX(ctx, s.key, token, ttl).Result()
-}
-
-func (s redisLeaseStore) NextEpoch(ctx context.Context) (uint64, error) {
-	value, err := s.rdb.Incr(ctx, s.fencingKey).Uint64()
-	if err != nil {
-		return 0, fmt.Errorf("increment leader epoch: %w", err)
-	}
-	return value, nil
 }
 
 func (s redisLeaseStore) Renew(ctx context.Context, token string, ttl time.Duration) (bool, error) {

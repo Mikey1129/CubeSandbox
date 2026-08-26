@@ -66,7 +66,6 @@ The following are the standard keys currently registered in the system (`v1`). N
 | Sandbox lifecycle state | `cube:v1:shared:sandbox:lifecycle:state:{sandboxID}` | String | shared | cube-lifecycle-manager | cube-lifecycle-manager | SET TTL (default 60s); state events may encode their Stream ID for monotonic CAS |
 | Sandbox lifecycle wakeup | `cube:v1:shared:sandbox:lifecycle:notify` | Pub/Sub channel | shared | cube-lifecycle-manager | cube-lifecycle-manager | n/a (best-effort hint) |
 | CLM leader lease | `cube:v1:shared:lock:lifecycle-manager:leader` | String | shared | cube-lifecycle-manager | cube-lifecycle-manager | SET NX PX, default 10s; single-key WATCH transaction for renew/release |
-| CLM leader fencing epoch | `cube:v1:shared:lifecycle-manager:leader-epoch` | String integer | shared | cube-lifecycle-manager | cube-lifecycle-manager, CubeProxy (via request header) | monotonic INCR after lease acquisition; no expiry |
 | Sandbox op lock (pause/resume/delete) | `cube:v1:master:lock:sandbox:{sandboxID}` | String | master | CubeMaster | CubeMaster | SET NX EX by op: pause **180s**, resume/delete **120s**, other **60s**; unlock = token-matched Lua GET+DEL (no renew) |
 | CubeProxy replica registry | `cube:v1:shared:cube_proxy:registry` | Hash | shared | CubeProxy | cube-lifecycle-manager | none (evicted on heartbeat expiry via `HDEL`) |
 | CubeProxy replica heartbeat | `cube:v1:shared:cube_proxy:heartbeat` | Sorted Set | shared | CubeProxy | cube-lifecycle-manager | none (`ZREMRANGEBYSCORE` on expiry, default 15s) |

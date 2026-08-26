@@ -152,8 +152,7 @@ func Handle(ctx context.Context, d Deps, ev redisstream.Event) {
 	}
 	recordWarmState()
 	if d.ProxyPush != nil {
-		writeCtx := leader.WithStatusEpoch(ctx, d.Leader)
-		if err := d.ProxyPush.SetState(writeCtx, ev.SandboxID, newState); err != nil {
+		if err := d.ProxyPush.SetState(ctx, ev.SandboxID, newState); err != nil {
 			log.Warn("state event: push proxy state failed",
 				zap.String("sandbox_id", ev.SandboxID),
 				zap.String("new", newState), zap.Error(err))

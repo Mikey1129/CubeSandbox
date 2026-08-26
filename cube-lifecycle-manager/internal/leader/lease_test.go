@@ -22,7 +22,6 @@ type fakeLeaseStore struct {
 	acquires int
 	renews   int
 	releases int
-	epoch    uint64
 }
 
 type delayedLeaseStore struct {
@@ -32,11 +31,6 @@ type delayedLeaseStore struct {
 func (s delayedLeaseStore) Acquire(_ context.Context, _ string, _ time.Duration) (bool, error) {
 	time.Sleep(s.delay)
 	return true, nil
-}
-
-func (s delayedLeaseStore) NextEpoch(_ context.Context) (uint64, error) {
-	time.Sleep(s.delay)
-	return 1, nil
 }
 
 func (s delayedLeaseStore) Renew(_ context.Context, _ string, _ time.Duration) (bool, error) {
@@ -65,13 +59,6 @@ func (s *fakeLeaseStore) Renew(_ context.Context, token string, _ time.Duration)
 	defer s.mu.Unlock()
 	s.renews++
 	return s.owner == token && s.renewOK, nil
-}
-
-func (s *fakeLeaseStore) NextEpoch(_ context.Context) (uint64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.epoch++
-	return s.epoch, nil
 }
 
 func (s *fakeLeaseStore) Release(_ context.Context, token string) error {
@@ -131,21 +118,15 @@ func TestOnlyOneLeaseBecomesLeaderAndStandbyTakesOver(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return first.IsLeader() != second.IsLeader()
 	}, time.Second, 5*time.Millisecond)
-	initialEpoch := first.Epoch()
-	if second.IsLeader() {
-		initialEpoch = second.Epoch()
-	}
 
 	if first.IsLeader() {
 		cancelFirst()
 		require.ErrorIs(t, <-firstDone, context.Canceled)
 		require.Eventually(t, second.IsLeader, time.Second, 5*time.Millisecond)
-		require.Greater(t, second.Epoch(), initialEpoch)
 	} else {
 		cancelSecond()
 		require.ErrorIs(t, <-secondDone, context.Canceled)
 		require.Eventually(t, first.IsLeader, time.Second, 5*time.Millisecond)
-		require.Greater(t, first.Epoch(), initialEpoch)
 		cancelFirst()
 		require.ErrorIs(t, <-firstDone, context.Canceled)
 		return

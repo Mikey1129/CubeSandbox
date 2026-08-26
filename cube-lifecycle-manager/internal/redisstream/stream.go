@@ -148,7 +148,7 @@ func (c *Client) CursorValid(ctx context.Context, cursor string) (bool, error) {
 		return false, fmt.Errorf("xrange oldest %s: %w", lifecycle.EventStreamKey, err)
 	}
 	if len(oldest) == 0 {
-		return true, nil
+		return false, nil
 	}
 	cmp, err := CompareStreamIDs(cursor, oldest[0].ID)
 	if err != nil {

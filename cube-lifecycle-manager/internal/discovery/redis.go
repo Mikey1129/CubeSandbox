@@ -41,8 +41,9 @@ type Options struct {
 	HeartbeatTTL    time.Duration // members with score < now-TTL are considered dead
 	RefreshInterval time.Duration // how often to re-scan Redis
 
-	// OnJoin fires exactly once when a proxy first appears in the live set.
-	// Used by main to trigger a registry replay (HGETALL meta → push).
+	// OnJoin fires when a proxy first appears in the live set, or when its
+	// StartedAt / AdminURL changes (restart or address move). Used by main
+	// to hydrate that replica from the registry snapshot.
 	OnJoin func(Endpoint)
 	// OnLeave fires when a proxy's heartbeat has aged past TTL.
 	OnLeave func(proxyID string)

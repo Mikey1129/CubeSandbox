@@ -37,12 +37,6 @@ const (
 	// maintenance work. All lease transactions touch only this key so they
 	// remain compatible with Redis Cluster slot constraints.
 	LeaderLeaseKey = "cube:v1:shared:lock:lifecycle-manager:leader"
-
-	// LeaderEpochKey is a monotonic fencing generation attached to leader-only
-	// CubeProxy writes. It is intentionally separate from the lease key: INCR
-	// is atomic on one Redis Cluster slot and does not require a cross-key
-	// transaction.
-	LeaderEpochKey = "cube:v1:shared:lifecycle-manager:leader-epoch"
 )
 
 // StateKilled is a state-key marker for a sandbox killed by the sweeper. It is
