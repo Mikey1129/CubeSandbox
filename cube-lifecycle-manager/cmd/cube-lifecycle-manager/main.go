@@ -211,6 +211,7 @@ func run() error {
 		TTL:       cfg.StateLockTTL,
 		Log:       logger.Named("statesync"),
 		Leader:    activeLeader,
+		Persister: lease,
 	}
 
 	errs := make(chan error, loopCount)
@@ -258,6 +259,7 @@ func run() error {
 type reconciledLeader struct {
 	lease      *leader.Lease
 	generation atomic.Uint64
+	ready      atomic.Bool
 }
 
 func (s *reconciledLeader) IsLeader() bool {
@@ -266,6 +268,7 @@ func (s *reconciledLeader) IsLeader() bool {
 	}
 	generation := s.lease.Generation()
 	return generation != 0 &&
+		s.ready.Load() &&
 		s.generation.Load() == generation &&
 		s.lease.IsLeader()
 }
@@ -274,10 +277,21 @@ func (s *reconciledLeader) Enabled() bool { return s.lease.Enabled() }
 
 func (s *reconciledLeader) markReconciled(generation uint64) {
 	s.generation.Store(generation)
+	s.ready.Store(true)
 }
 
+// invalidate pauses singleton work without forgetting the drained generation.
+// Transient XREAD errors must not call this; only a rebuilt-from-trim registry
+// is unsafe to sweep.
 func (s *reconciledLeader) invalidate() {
-	s.generation.Store(0)
+	s.ready.Store(false)
+}
+
+func (s *reconciledLeader) restoreIfSameGeneration() {
+	generation := s.lease.Generation()
+	if generation != 0 && generation == s.generation.Load() && s.lease.IsLeader() {
+		s.ready.Store(true)
+	}
 }
 
 type streamProgress struct {
@@ -398,7 +412,10 @@ func hydrateFleet(ctx context.Context, push *proxypush.Client, stream *redisstre
 // reconcileOnLeadership catches the newly promoted replica up to the stream
 // high-water, waits one CubeProxy HTTP timeout so in-flight writes from the
 // previous leader can finish, catches up again, then allows singleton work.
-// Fleet hydration is best-effort and must not gate leadership.
+// The HTTP drain runs only when the lease generation changed; a same-generation
+// restore (stream trim) must not stall singleton work. Catch-up CAS's terminal
+// state into the shared Redis key (lease holder) but does not push CubeProxy;
+// fleet hydration is best-effort afterwards and must not gate leadership.
 func reconcileOnLeadership(ctx context.Context, lease *leader.Lease, active *reconciledLeader,
 	stream *redisstream.Client, push *proxypush.Client, reg *registry.Registry,
 	fleet proxypush.Fleet, ssDeps statesync.Deps, progress *streamProgress,
@@ -413,19 +430,23 @@ func reconcileOnLeadership(ctx context.Context, lease *leader.Lease, active *rec
 	for {
 		generation := lease.Generation()
 		if generation != 0 && lease.IsLeader() && !active.IsLeader() {
-			log.Info("leadership catch-up begin", zap.Uint64("generation", generation))
-			if catchUpGeneration(ctx, generation, lease, stream, push, reg, ssDeps, progress, eventApplyMu, log) {
-				if drain > 0 && !waitForRetry(ctx, drain) {
+			prev := active.generation.Load()
+			needDrain := generation != prev
+			log.Info("leadership catch-up begin",
+				zap.Uint64("generation", generation),
+				zap.Bool("drain", needDrain && drain > 0))
+			caughtUp := catchUpGeneration(ctx, generation, lease, stream, push, reg, ssDeps, progress, eventApplyMu, log)
+			if caughtUp && needDrain && drain > 0 {
+				if !waitForRetry(ctx, drain) {
 					return ctx.Err()
 				}
-				if catchUpGeneration(ctx, generation, lease, stream, push, reg, ssDeps, progress, eventApplyMu, log) &&
-					lease.IsLeader() && generation == lease.Generation() {
-					active.markReconciled(generation)
-					log.Info("leadership catch-up complete", zap.Uint64("generation", generation))
+				caughtUp = catchUpGeneration(ctx, generation, lease, stream, push, reg, ssDeps, progress, eventApplyMu, log)
+			}
+			if caughtUp && lease.IsLeader() && generation == lease.Generation() {
+				active.markReconciled(generation)
+				log.Info("leadership catch-up complete", zap.Uint64("generation", generation))
+				if needDrain {
 					go hydrateFleet(ctx, push, stream, reg, fleet, active, log)
-				} else if lease.IsLeader() {
-					log.Warn("leadership catch-up incomplete; retrying",
-						zap.Uint64("generation", generation))
 				}
 			} else if lease.IsLeader() {
 				log.Warn("leadership catch-up incomplete; retrying",
@@ -466,6 +487,8 @@ func catchUpGeneration(ctx context.Context, generation uint64, lease *leader.Lea
 func resolvePromotionState(
 	ctx context.Context, stream *redisstream.Client, entry registry.Entry,
 ) (string, error) {
+	// After promotion catch-up the lease holder has CAS'd terminal state
+	// events into this key, so it is at least as fresh as RuntimeState.
 	state, ok, err := stream.GetState(ctx, entry.Meta.SandboxID)
 	if err != nil {
 		return "", err
@@ -561,6 +584,7 @@ func consumeStream(ctx context.Context, stream *redisstream.Client, push *proxyp
 				}
 				continue
 			}
+			active.restoreIfSameGeneration()
 			log.Warn("stream cursor was trimmed; registry rebuilt",
 				zap.String("old_cursor", cursor),
 				zap.String("new_cursor", progress.Cursor()))
@@ -570,7 +594,6 @@ func consumeStream(ctx context.Context, stream *redisstream.Client, push *proxyp
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			active.invalidate()
 			log.Warn("xread failed; backing off", zap.Error(err))
 			if !waitForRetry(ctx, time.Second) {
 				return ctx.Err()

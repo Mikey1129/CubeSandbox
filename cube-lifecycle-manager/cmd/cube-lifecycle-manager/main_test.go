@@ -31,6 +31,11 @@ type standbyStatus struct{}
 func (standbyStatus) IsLeader() bool { return false }
 func (standbyStatus) Enabled() bool  { return true }
 
+type persistStatus struct{}
+
+func (persistStatus) IsLeader() bool { return true }
+func (persistStatus) Enabled() bool  { return true }
+
 func TestCatchUpStreamToDrainsPromotionHighWater(t *testing.T) {
 	server := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
@@ -76,6 +81,59 @@ func TestCatchUpStreamToDrainsPromotionHighWater(t *testing.T) {
 	}
 	if reg.Get("must-catch-up") == nil {
 		t.Fatal("promotion catch-up did not apply high-water event")
+	}
+}
+
+func TestCatchUpStateEventPersistsSharedKeyWithoutProxyPush(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	ctx := context.Background()
+	stream := redisstream.New(rdb, zap.NewNop())
+
+	if err := stream.SetState(ctx, "sbx", lifecycle.StatePaused, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(lifecycle.StatePayload{
+		State: lifecycle.StateRunning,
+		Actor: lifecycle.ActorCubeMaster,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: lifecycle.EventStreamKey,
+		ID:     "10-0",
+		Values: map[string]interface{}{
+			lifecycle.FieldOp:        lifecycle.OpState,
+			lifecycle.FieldSandboxID: "sbx",
+			lifecycle.FieldPayload:   string(payload),
+			lifecycle.FieldTimestamp: time.Now().UnixMilli(),
+		},
+	}).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := registry.New()
+	reg.Upsert(lifecycle.SandboxLifecycleMeta{SandboxID: "sbx"})
+	reg.SetRuntimeState("sbx", lifecycle.StatePaused)
+	progress := newStreamProgress("0-0")
+	deps := statesync.Deps{
+		Registry:  reg,
+		Redis:     stream,
+		TTL:       time.Minute,
+		Leader:    standbyStatus{},
+		Persister: persistStatus{},
+		Log:       zap.NewNop(),
+	}
+	push := proxypush.New(nil, "", time.Second, zap.NewNop())
+
+	if err := catchUpStreamTo(ctx, "10-0", stream, push, reg, deps, progress, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := resolvePromotionState(ctx, stream, *reg.Get("sbx"))
+	if err != nil || state != lifecycle.StateRunning {
+		t.Fatalf("resolvePromotionState() = (%q, %v), want running", state, err)
 	}
 }
 
@@ -291,5 +349,114 @@ func TestReconcileOnLeadershipDoesNotWaitForFleetHTTP(t *testing.T) {
 			t.Fatal("leadership stayed blocked on CubeProxy hydrate failure")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func startTestLease(t *testing.T, rdb *redis.Client) (*leader.Lease, context.Context) {
+	t.Helper()
+	lease := leader.New(leader.Options{
+		Redis:         rdb,
+		Key:           "lease",
+		Identity:      "promoted",
+		Enabled:       true,
+		TTL:           2 * time.Second,
+		RenewInterval: 200 * time.Millisecond,
+		RetryInterval: 20 * time.Millisecond,
+		Log:           zap.NewNop(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = lease.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !lease.IsLeader() {
+		if time.Now().After(deadline) {
+			t.Fatal("lease was not acquired")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return lease, ctx
+}
+
+func TestInvalidateKeepsGenerationAndSkipsHTTPDrain(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	lease, ctx := startTestLease(t, rdb)
+
+	active := &reconciledLeader{lease: lease}
+	active.markReconciled(lease.Generation())
+	active.invalidate()
+	if active.IsLeader() {
+		t.Fatal("invalidate must pause executable leadership")
+	}
+	if got := active.generation.Load(); got != lease.Generation() {
+		t.Fatalf("invalidate cleared generation to %d", got)
+	}
+
+	stream := redisstream.New(rdb, zap.NewNop())
+	reg := registry.New()
+	progress := newStreamProgress("0-0")
+	fleet := discovery.NewStatic(nil)
+	push := proxypush.New(nil, "", time.Second, zap.NewNop())
+	var mu sync.Mutex
+	deps := statesync.Deps{Registry: reg, Leader: active, Log: zap.NewNop()}
+	go func() {
+		_ = reconcileOnLeadership(
+			ctx, lease, active, stream, push, reg, fleet, deps, progress, &mu,
+			10*time.Millisecond, time.Hour, zap.NewNop(),
+		)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !active.IsLeader() {
+		if time.Now().After(deadline) {
+			t.Fatal("same-generation restore waited for HTTPTimeout drain")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestFirstGenerationStillDrainsBeforeBecomingExecutable(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	lease, ctx := startTestLease(t, rdb)
+
+	active := &reconciledLeader{lease: lease}
+	stream := redisstream.New(rdb, zap.NewNop())
+	reg := registry.New()
+	progress := newStreamProgress("0-0")
+	fleet := discovery.NewStatic(nil)
+	push := proxypush.New(nil, "", time.Second, zap.NewNop())
+	var mu sync.Mutex
+	deps := statesync.Deps{Registry: reg, Leader: active, Log: zap.NewNop()}
+	go func() {
+		_ = reconcileOnLeadership(
+			ctx, lease, active, stream, push, reg, fleet, deps, progress, &mu,
+			10*time.Millisecond, time.Hour, zap.NewNop(),
+		)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	if active.IsLeader() {
+		t.Fatal("first-generation promotion skipped HTTPTimeout drain")
+	}
+}
+
+func TestRestoreIfSameGenerationAfterTrim(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	lease, _ := startTestLease(t, rdb)
+
+	active := &reconciledLeader{lease: lease}
+	active.markReconciled(lease.Generation())
+	active.invalidate()
+	if active.IsLeader() {
+		t.Fatal("invalidate must pause executable leadership")
+	}
+	active.restoreIfSameGeneration()
+	if !active.IsLeader() {
+		t.Fatal("trim rebuild should restore the same lease generation without draining")
 	}
 }

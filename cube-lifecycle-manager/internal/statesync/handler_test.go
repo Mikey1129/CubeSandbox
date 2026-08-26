@@ -284,6 +284,25 @@ func TestHandle_StandbyRetainsWarmStateWithoutExternalWrites(t *testing.T) {
 	}
 }
 
+func TestHandle_LeaseHolderPersistsWithoutPushingProxy(t *testing.T) {
+	d, r, p, reg := buildDeps(t)
+	d.Leader = fakeLeader{leader: false}
+	d.Persister = fakeLeader{leader: true}
+	r.states["sbx-1"] = lifecycle.StatePaused
+
+	Handle(context.Background(), d, stateEvent("sbx-1", lifecycle.StateRunning, lifecycle.ActorCubeMaster))
+
+	if got := r.states["sbx-1"]; got != lifecycle.StateRunning {
+		t.Fatalf("lease holder Redis state = %q, want running", got)
+	}
+	if got := p.recorded(); len(got) != 0 {
+		t.Fatalf("promotion catch-up must not push CubeProxy: %+v", got)
+	}
+	if got := reg.Get("sbx-1").RuntimeState; got != lifecycle.StateRunning {
+		t.Fatalf("RuntimeState = %q, want running", got)
+	}
+}
+
 func TestHandle_RejectedOldEventDoesNotRollBackWarmState(t *testing.T) {
 	d, r, p, reg := buildDeps(t)
 	r.states["sbx-1"] = lifecycle.StateRunning

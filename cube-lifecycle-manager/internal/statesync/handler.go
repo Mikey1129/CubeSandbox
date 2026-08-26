@@ -55,9 +55,25 @@ type Deps struct {
 	// Now returns the current time. Injectable for tests.
 	Now func() time.Time
 
-	// Leader gates shared Redis and CubeProxy writes. Standbys still update
-	// their local registry so promotion starts from a warm view.
+	// Leader gates CubeProxy writes. Standbys never push the fleet.
 	Leader leader.Status
+	// Persister gates shared Redis state-key writes. During promotion
+	// catch-up the replica already holds the lease but is not yet an
+	// executable leader; it must still CAS the key so hydrate does not
+	// replay a stale value. Nil means "same as Leader".
+	Persister leader.Status
+}
+
+func persistEnabled(d Deps) bool {
+	p := d.Persister
+	if p == nil {
+		p = d.Leader
+	}
+	return p == nil || p.IsLeader()
+}
+
+func pushEnabled(d Deps) bool {
+	return d.Leader == nil || d.Leader.IsLeader()
 }
 
 // Handle applies a single OpState event. It is intentionally best-effort:
@@ -110,7 +126,7 @@ func Handle(ctx context.Context, d Deps, ev redisstream.Event) {
 		}
 		d.Registry.SetRuntimeState(ev.SandboxID, newState)
 	}
-	if d.Leader != nil && !d.Leader.IsLeader() {
+	if !persistEnabled(d) {
 		// Standbys consume one ordered XREAD sequence and retain the latest
 		// terminal state for promotion, but never perform external writes.
 		recordWarmState()
@@ -151,7 +167,7 @@ func Handle(ctx context.Context, d Deps, ev redisstream.Event) {
 		return
 	}
 	recordWarmState()
-	if d.ProxyPush != nil {
+	if pushEnabled(d) && d.ProxyPush != nil {
 		if err := d.ProxyPush.SetState(ctx, ev.SandboxID, newState); err != nil {
 			log.Warn("state event: push proxy state failed",
 				zap.String("sandbox_id", ev.SandboxID),
