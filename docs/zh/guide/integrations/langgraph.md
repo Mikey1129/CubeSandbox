@@ -1,0 +1,284 @@
+---
+title: LangGraph 集成指南
+author: Mikey1129
+date: 2026-08-29
+tags:
+  - integration
+  - langgraph
+  - agent
+lang: zh-CN
+---
+
+# LangGraph 集成指南
+
+将一个 [LangGraph](https://github.com/langchain-ai/langgraph) Agent——由节点与条件边构成的显式图——运行在
+[CubeSandbox](https://github.com/TencentCloud/CubeSandbox) 的 MicroVM 中，让它在沙箱内执行 Python。由于
+Cube 暴露了**与 E2B 兼容的 API**，代码执行工具可以从 E2B 无缝切换到 Cube，同时为 Agent 生成的每一行
+代码获得 KVM 级隔离。
+
+本文是 [LangChain 集成](./langchain.md)的 LangGraph 对应版本。LangChain 指南使用高层封装
+`create_agent`，本文则用 `StateGraph` **显式**搭建图：由你掌控控制流、在节点间共享同一个沙箱，并把
+LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
+
+## LangGraph 与 `create_agent` 的对比
+
+| | `create_agent`（LangChain 指南） | 显式 `StateGraph`（本文） |
+|---|---|---|
+| 图结构 | 固定的工具调用循环，对你是黑盒 | 每个节点、每条边都由你定义 |
+| 重试 / 循环 | 隐含在 Agent 循环内部 | 显式的 `add_conditional_edges` |
+| 状态 | 不透明的消息历史 | 你设计的类型化 `State`（沙箱 id、重试次数、判定结果…） |
+| 恢复 | 不直接暴露 | `checkpointer` 对接 Cube 的 `pause()` / `connect()` |
+
+当你只需要一个能调用工具的 Agent 时，用 `create_agent` 即可。当你想构建「生成 → 执行 → 审查 → 重试」
+这样的多步工作流、让沙箱跨阶段复用、并在图中途可恢复时，请使用显式的 `StateGraph`。
+
+## 集成对象与版本
+
+| 组件 | 版本 | 说明 |
+|---|---|---|
+| langgraph | `>=0.2` | `StateGraph`、`START`/`END`、`add_messages` |
+| langchain-openai | `>=1.0,<2.0` | `ChatOpenAI`（任意 OpenAI 兼容端点） |
+| cubesandbox SDK | `>=0.6.0` | `Sandbox.create` / `files.write` / `commands.run` |
+| CubeSandbox 平台 | `>=0.3.0` | 核心；可选特性见 LangChain 指南 |
+| CubeSandbox 基础镜像 | `ghcr.io/tencentcloud/cubesandbox-base:2026.16` | 在其上叠加 Python 栈 |
+
+## 前置条件
+
+前置条件与 LangChain 指南完全一致——同一个沙箱模板对两者都适用：
+
+- 已部署 CubeSandbox，CubeAPI 可从 `http://<node>:3000` 访问。
+- 已构建并注册一个含 Python 栈（pandas / numpy / matplotlib / scikit-learn）的模板镜像。可参考
+  LangChain 指南的[模板镜像](../integrations/langchain.md)步骤，或直接复用同一个 template id。
+- `cubesandbox` SDK 所需环境变量：`CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP`。
+- 经 `OPENAI_BASE_URL` / `OPENAI_API_KEY` 接入的 OpenAI 兼容 LLM 端点。
+
+## 接入步骤
+
+### 1. 构建模板镜像
+
+复用 LangChain 指南的 `Dockerfile`（在 `cubesandbox-base` 之上叠加 Python 数据科学栈，envd 监听
+`:49983`）。镜像里无需烘焙任何 LangGraph 专属依赖——图在宿主机上运行，只有**代码执行**发生在沙箱内。
+
+### 2. 注册模板并配置环境变量
+
+```bash
+cubemastercli tpl create-from-image \
+  --image <your-registry>/langgraph-cube:latest \
+  --writable-layer-size 2G \
+  --expose-port 49983 --probe 49983 --probe-path /health
+```
+
+随后设置 `CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP` 以及 LLM key。LangChain 指南中的
+环境变量表此处完全适用。
+
+### 3. 定义图
+
+图由三个活动部分组成：
+
+- **`coder`** —— 让 LLM 生成 Python 脚本，并在沙箱内执行。
+- **`reviewer`** —— 让 LLM 判断输出是否回答了请求。
+- **一条条件边** —— 将 `reviewer` 路由回 `coder`（重试）或路由到 `END`。
+
+整个运行只创建一个沙箱，并在每次 `coder` 调用间复用；其 id 保存在 `State` 中，从而跨节点存续、之后可恢复。
+
+```python
+from __future__ import annotations
+
+import itertools
+import os
+import sys
+from typing import Annotated, TypedDict
+
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from cubesandbox import Sandbox
+
+load_dotenv()
+
+for v in ("CUBE_TEMPLATE_ID",):
+    if not os.environ.get(v):
+        raise SystemExit(f"Missing env: {v}")
+
+_llm_key = os.getenv("OPENAI_API_KEY") or os.getenv("TOKENHUB_API_KEY")
+if not _llm_key:
+    raise SystemExit("Missing LLM API key")
+
+llm = ChatOpenAI(
+    model=os.getenv("CHAT_MODEL") or "deepseek-v3",
+    api_key=_llm_key,
+    base_url=os.getenv("OPENAI_BASE_URL") or "https://tokenhub.tencentmaas.com/v1",
+    timeout=60, max_retries=2, temperature=0,
+)
+
+
+class AgentState(TypedDict):
+    """跨节点共享的状态。`messages` 累积对话；`sandbox_id` 将同一个 MicroVM
+    固定到整个图运行期间，以便之后用 `pause()` / `connect()` 恢复。"""
+    messages: Annotated[list, add_messages]
+    sandbox_id: str
+    attempts: int
+    done: bool
+
+
+def make_run_python(sandbox: Sandbox):
+    """返回一个绑定到单个 Cube 沙箱的 `run_python` 工具——与 LangChain 指南使用
+    相同的 `cubesandbox` SDK 模式。"""
+    _counter = itertools.count()
+
+    def run_python(code: str) -> str:
+        script = f"/workspace/_agent_{next(_counter)}.py"
+        sandbox.files.write(script, code)
+        result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
+        out = result.stdout
+        if result.stderr:
+            out += "\n--- stderr ---\n" + result.stderr
+        if result.exit_code != 0:
+            out += f"\n[non-zero exit code: {result.exit_code}]"
+        return out
+
+    return run_python
+
+
+CODER_PROMPT = (
+    "You are a data analyst. Write a single self-contained Python script that answers "
+    "the latest user request using the dataset at /workspace/sales.csv "
+    "(columns month,product,units,price). The environment has pandas, numpy, "
+    "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
+    "network access."
+)
+
+REVIEWER_PROMPT = (
+    "You are a reviewer. Given the user request and the latest code output, decide "
+    "whether the request is fully answered. Reply with exactly one word: DONE if the "
+    "output answers the request, otherwise RETRY followed by one line on what is missing."
+)
+
+
+def coder(state: AgentState, run_python) -> dict:
+    """让 LLM 生成代码，在 Cube 沙箱内执行，并追加输出。"""
+    code = llm.invoke(
+        [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
+    ).content
+    output = run_python(code)
+    return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
+
+
+def reviewer(state: AgentState) -> dict:
+    """判断最新输出是否回答了请求。"""
+    verdict = llm.invoke(
+        [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
+    ).content.strip().upper()
+    return {
+        "messages": [{"role": "assistant", "content": f"[reviewer] {verdict}"}],
+        "attempts": state.get("attempts", 0) + 1,
+        "done": verdict.startswith("DONE"),
+    }
+
+
+def route_after_review(state: AgentState) -> str:
+    """条件边：重试 `coder`，或达到次数上限后结束。"""
+    if state["done"] or state["attempts"] >= 3:
+        return "end"
+    return "retry"
+
+
+def build_graph(run_python, checkpointer=None):
+    builder = StateGraph(AgentState)
+    builder.add_node("coder", lambda s: coder(s, run_python))
+    builder.add_node("reviewer", reviewer)
+    builder.add_edge(START, "coder")
+    builder.add_edge("coder", "reviewer")
+    builder.add_conditional_edges(
+        "reviewer",
+        route_after_review,
+        {"retry": "coder", "end": END},
+    )
+    return builder.compile(checkpointer=checkpointer)
+
+
+if __name__ == "__main__":
+    question = sys.argv[1] if len(sys.argv) > 1 else (
+        "Load sales.csv from /workspace, compute total revenue per month, "
+        "and report the month -> revenue numbers."
+    )
+
+    # 整个运行只用一个 MicroVM，在 coder -> reviewer 循环中反复复用。
+    # 上下文管理器在退出时销毁沙箱，不会留下残留。
+    with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=600) as sandbox:
+        run_python = make_run_python(sandbox)
+        graph = build_graph(run_python)
+        result = graph.invoke({
+            "messages": [{"role": "user", "content": question}],
+            "sandbox_id": sandbox.sandbox_id,
+            "attempts": 0,
+            "done": False,
+        })
+        for msg in reversed(result["messages"]):
+            if msg.content:
+                print(msg.content)
+                break
+        else:
+            print("(no final answer)")
+```
+
+运行：
+
+```bash
+pip install langgraph langchain-openai cubesandbox python-dotenv
+python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
+```
+
+### 预期行为
+
+`coder` 将 LLM 生成的脚本写入全新的 `/workspace/_agent_<n>.py` 并在 MicroVM 内运行；`reviewer` 读取
+输出，要么返回 `DONE`，要么把图送回 `coder`（最多 3 次）。`State` 中的 `attempts` 计数器给循环设了上限，
+避免一个执拗的请求无限循环下去。
+
+## 进阶：checkpoint 与 `pause()` / `connect()`
+
+LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互补，适合长时间、可恢复的 Agent：
+
+| LangGraph | Cube Sandbox |
+|---|---|
+| `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
+| `config = {"configurable": {"thread_id": "t1"}}` | `State` 中的 `sandbox_id` |
+| 用 `invoke(..., config)` 恢复 | `sandbox.pause()` 后 `Sandbox.connect(sandbox_id)` |
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+graph = build_graph(run_python, checkpointer=MemorySaver())
+config = {"configurable": {"thread_id": "t1"}}
+
+with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800) as sandbox:
+    graph.invoke(initial_input, config=config)      # 在 thread_id 下保存 checkpoint
+    sandbox.pause()
+    sandbox = Sandbox.connect(sandbox.sandbox_id)   # 恢复后 /workspace 保持不变
+    graph.invoke(follow_up_input, config=config)    # 在同一 thread_id 上恢复
+```
+
+让 LangGraph 的 `thread_id` 与 Cube 的 `sandbox_id` 保持一致（例如都存放在你的编排层），这样恢复的图才能
+重新挂载到同一个沙箱上。
+
+## 注意事项
+
+- **State 不会随沙箱序列化。** `State` 存在于你的进程（或 LangGraph 的 checkpointer）中；只有 `/workspace`
+  会在 `pause()` / `connect()` 之间保留。任何需要在硬恢复后仍存在的图状态，都要自行持久化。
+- **一个沙箱、一次图运行。** `coder`/`reviewer` 循环复用同一个 MicroVM；不要每个节点新建沙箱——那样每一步
+  都要付一次生命周期开销。
+- **工具调用之间状态不保留。** 每次 `commands.run` 都是全新的 `python3` 进程；代码片段所需内容都要内联，
+  或把中间结果写回 `/workspace`。
+- **把栈预先装进镜像。** 在默认拒绝出口流量的策略下，运行时的 `pip install` 会失败；请把 pandas / numpy /
+  matplotlib 烘焙进模板。
+- **给重试循环设上限。** 用 `attempts` 计数器（如上）或 LangGraph 的递归限制，避免一直要求重试的 reviewer
+  耗尽沙箱的 `timeout`。
+
+## References
+
+- LangChain 集成（`create_agent` 对应版本）：[`langchain.md`](./langchain.md)
+- 自定义模板镜像：[`docs/guide/tutorials/bring-your-own-image.md`](../tutorials/bring-your-own-image.md)
+- 快照 / 克隆 / 回滚：[`docs/guide/snapshot-rollback-clone.md`](../snapshot-rollback-clone.md)
+- LangGraph：<https://github.com/langchain-ai/langgraph>
+- E2B SDK：<https://github.com/e2b-dev/e2b>
