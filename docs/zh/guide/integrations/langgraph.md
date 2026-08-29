@@ -97,7 +97,7 @@ from cubesandbox import Sandbox
 
 load_dotenv()
 
-for v in ("CUBE_TEMPLATE_ID",):
+for v in ("CUBE_API_URL", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
     if not os.environ.get(v):
         raise SystemExit(f"Missing env: {v}")
 
@@ -171,8 +171,8 @@ def extract_text(content) -> str:
     return str(content)
 
 
-def strip_code_fence(text: str) -> str:
-    """返回第一个 Markdown 围栏内的代码；若没有围栏则返回原文。
+def strip_code_fence(text: str) -> str | None:
+    """返回第一个 Markdown 围栏内的代码；若没有围栏则返回 None。
     模型常在围栏块前加上说明文字，因此不能假设回复以围栏开头。"""
     fence = "`" * 3                      # 三个反引号，避免字面量围栏
     text = text.strip()
@@ -183,7 +183,7 @@ def strip_code_fence(text: str) -> str:
             start = i
             break
     if start is None:
-        return text
+        return None
     inner = []
     for line in lines[start + 1:]:
         if line.strip().startswith(fence):
@@ -197,9 +197,15 @@ def coder(state: AgentState, run_python) -> dict:
     code = strip_code_fence(extract_text(llm.invoke(
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
     ).content))
+    if code is None:
+        # 模型没有返回围栏代码块；直接提示，而不是把散文写进 .py 文件、浪费一次重试机会。
+        return {"messages": [{"role": "assistant",
+                              "content": "[code output]\n(no code block in model reply)"}]}
     output = run_python(code)
-    # 截断输出，避免超大结果（如打印整个 DataFrame）在下一次 llm.invoke 时撑爆模型上下文窗口。
-    output = output[:4000]
+    # 截断输出以免超大结果（如打印整个 DataFrame）撑爆模型上下文窗口；保留尾部——
+    # 打印的数字（以及 stderr/traceback）在末尾，必须让它们在截断后仍存活。
+    if len(output) > 4000:
+        output = "[earlier output truncated]\n" + output[-4000:]
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
 

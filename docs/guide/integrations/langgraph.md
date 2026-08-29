@@ -104,7 +104,7 @@ from cubesandbox import Sandbox
 
 load_dotenv()
 
-for v in ("CUBE_TEMPLATE_ID",):
+for v in ("CUBE_API_URL", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
     if not os.environ.get(v):
         raise SystemExit(f"Missing env: {v}")
 
@@ -180,9 +180,9 @@ def extract_text(content) -> str:
     return str(content)
 
 
-def strip_code_fence(text: str) -> str:
-    """Return the code inside the first markdown fence, or the whole text when
-    there is none — models often prefix the fenced block with prose."""
+def strip_code_fence(text: str) -> str | None:
+    """Return the code inside the first markdown fence, or None when the reply
+    has no fenced block — models often prefix the fenced block with prose."""
     fence = "`" * 3                      # three backticks, without a literal fence
     text = text.strip()
     lines = text.splitlines()
@@ -192,7 +192,7 @@ def strip_code_fence(text: str) -> str:
             start = i
             break
     if start is None:
-        return text
+        return None
     inner = []
     for line in lines[start + 1:]:
         if line.strip().startswith(fence):
@@ -206,10 +206,17 @@ def coder(state: AgentState, run_python) -> dict:
     code = strip_code_fence(extract_text(llm.invoke(
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
     ).content))
+    if code is None:
+        # The model returned no fenced code block; surface that instead of writing
+        # prose to a .py file and wasting an attempt on a SyntaxError.
+        return {"messages": [{"role": "assistant",
+                              "content": "[code output]\n(no code block in model reply)"}]}
     output = run_python(code)
     # Cap the output so a huge result (e.g. a printed DataFrame) cannot blow the
-    # model's context window on the next llm.invoke.
-    output = output[:4000]
+    # model's context window. Keep the tail: the printed numbers (and any
+    # stderr/traceback) land at the end, so they must survive the truncation.
+    if len(output) > 4000:
+        output = "[earlier output truncated]\n" + output[-4000:]
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
 
