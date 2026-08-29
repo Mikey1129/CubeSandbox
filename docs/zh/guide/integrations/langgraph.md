@@ -156,6 +156,21 @@ REVIEWER_PROMPT = (
 )
 
 
+def extract_text(content) -> str:
+    """从消息内容中提取纯文本；content 可能是 str，也可能是 content blocks 列表。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "\n".join(parts)
+    return str(content)
+
+
 def strip_code_fence(text: str) -> str:
     """剥离模型可能包裹代码的 Markdown 围栏。"""
     fence = "`" * 3                      # 三个反引号，避免字面量围栏
@@ -172,18 +187,18 @@ def strip_code_fence(text: str) -> str:
 
 def coder(state: AgentState, run_python) -> dict:
     """让 LLM 生成代码，在 Cube 沙箱内执行，并追加输出。"""
-    code = strip_code_fence(llm.invoke(
+    code = strip_code_fence(extract_text(llm.invoke(
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
-    ).content)
+    ).content))
     output = run_python(code)
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
 
 def reviewer(state: AgentState) -> dict:
     """判断最新输出是否回答了请求。"""
-    verdict = llm.invoke(
+    verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
-    ).content.strip().upper()
+    ).content).strip().upper()
     return {
         "messages": [{"role": "assistant", "content": f"[reviewer] {verdict}"}],
         "attempts": state.get("attempts", 0) + 1,
@@ -269,7 +284,8 @@ config = {"configurable": {"thread_id": "t1"}}
 
 
 def stage_input(messages, sandbox_id):
-    """构建单阶段的图输入。`attempts`/`done` 没有 reducer，显式传值会覆盖 checkpoint 里的旧值。"""
+    """构建单阶段的图输入。`attempts`/`done` 没有 reducer，显式传值会覆盖 checkpoint 里的旧值；
+    `messages` 使用 `add_messages`，新消息会追加到之前的历史——若想从干净状态开始，请换新的 thread_id。"""
     return {"messages": messages, "sandbox_id": sandbox_id, "attempts": 0, "done": False}
 
 

@@ -163,6 +163,22 @@ REVIEWER_PROMPT = (
 )
 
 
+def extract_text(content) -> str:
+    """Return plain text from a message content, which may be a str or a list
+    of content blocks (some OpenAI-compatible endpoints return the latter)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "\n".join(parts)
+    return str(content)
+
+
 def strip_code_fence(text: str) -> str:
     """Strip optional markdown code fences the model may wrap code in."""
     fence = "`" * 3                      # three backticks, without a literal fence
@@ -179,18 +195,18 @@ def strip_code_fence(text: str) -> str:
 
 def coder(state: AgentState, run_python) -> dict:
     """Ask the LLM for code, execute it in the Cube sandbox, append the output."""
-    code = strip_code_fence(llm.invoke(
+    code = strip_code_fence(extract_text(llm.invoke(
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
-    ).content)
+    ).content))
     output = run_python(code)
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
 
 def reviewer(state: AgentState) -> dict:
     """Judge whether the latest output answers the request."""
-    verdict = llm.invoke(
+    verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
-    ).content.strip().upper()
+    ).content).strip().upper()
     return {
         "messages": [{"role": "assistant", "content": f"[reviewer] {verdict}"}],
         "attempts": state.get("attempts", 0) + 1,
@@ -280,7 +296,9 @@ config = {"configurable": {"thread_id": "t1"}}
 
 def stage_input(messages, sandbox_id):
     """Build the graph input for one stage. `attempts`/`done` have no reducer,
-    so explicit values here overwrite whatever the checkpoint stored."""
+    so explicit values here overwrite whatever the checkpoint stored. `messages`
+    uses `add_messages`, so new messages are APPENDED to the prior history —
+    use a fresh thread_id if you want a clean slate."""
     return {"messages": messages, "sandbox_id": sandbox_id, "attempts": 0, "done": False}
 
 
