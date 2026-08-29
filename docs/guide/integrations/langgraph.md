@@ -224,7 +224,10 @@ def coder(state: AgentState, run_python) -> dict:
     # stderr/traceback) land at the end, so they must survive the truncation.
     if len(output) > 4000:
         output = "[earlier output truncated]\n" + output[-4000:]
-    return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
+    # Include the code alongside the output so that on a RETRY the coder can see
+    # what it wrote last time instead of repeating the same mistake.
+    return {"messages": [{"role": "assistant",
+                          "content": f"[code]\n{code}\n[code output]\n{output}"}]}
 
 
 def reviewer(state: AgentState) -> dict:
@@ -232,10 +235,9 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # Parse the first token so a markdown-wrapped or prose-led verdict
-    # ("**DONE**", "The result is DONE") still resolves correctly.
-    token = (verdict.split() or [""])[0].strip(":*#`")
-    done = token.startswith("DONE")
+    # Scan every whitespace-delimited token so a markdown-wrapped or prose-led
+    # verdict ("**DONE**", "The result is DONE") still resolves to DONE.
+    done = any(t.strip(":*#`").startswith("DONE") for t in verdict.split())
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
@@ -285,8 +287,11 @@ if __name__ == "__main__":
         # The last message is the reviewer's verdict; print the code output
         # instead so the user actually sees the computed numbers.
         for msg in reversed(result["messages"]):
-            if msg.content and str(msg.content).startswith("[code output]"):
-                print(msg.content)
+            content = str(msg.content)
+            marker = "[code output]"
+            idx = content.find(marker)
+            if idx != -1:
+                print(content[idx:])
                 break
         else:
             print("(no code output)")

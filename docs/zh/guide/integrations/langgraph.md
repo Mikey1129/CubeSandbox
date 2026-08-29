@@ -211,7 +211,10 @@ def coder(state: AgentState, run_python) -> dict:
     # 打印的数字（以及 stderr/traceback）在末尾，必须让它们在截断后仍存活。
     if len(output) > 4000:
         output = "[earlier output truncated]\n" + output[-4000:]
-    return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
+    # 把代码连同输出一起写入消息，这样 RETRY 时 coder 能看到上次写了什么，
+    # 而不是重复犯同样的错误。
+    return {"messages": [{"role": "assistant",
+                          "content": f"[code]\n{code}\n[code output]\n{output}"}]}
 
 
 def reviewer(state: AgentState) -> dict:
@@ -219,10 +222,9 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # 解析第一个 token，这样被 markdown 包裹或前面带散文的判定
-    # （"**DONE**"、"The result is DONE"）也能正确识别。
-    token = (verdict.split() or [""])[0].strip(":*#`")
-    done = token.startswith("DONE")
+    # 扫描每个空白分隔的 token，这样被 markdown 包裹或前面带散文的判定
+    # （"**DONE**"、"The result is DONE"）也能正确识别为 DONE。
+    done = any(t.strip(":*#`").startswith("DONE") for t in verdict.split())
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {
@@ -271,8 +273,11 @@ if __name__ == "__main__":
         })
         # 最后一条消息是 reviewer 的判定；改为打印代码输出，让用户真正看到计算结果。
         for msg in reversed(result["messages"]):
-            if msg.content and str(msg.content).startswith("[code output]"):
-                print(msg.content)
+            content = str(msg.content)
+            marker = "[code output]"
+            idx = content.find(marker)
+            if idx != -1:
+                print(content[idx:])
                 break
         else:
             print("(no code output)")
