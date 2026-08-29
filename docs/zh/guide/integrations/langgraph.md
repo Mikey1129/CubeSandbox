@@ -146,7 +146,8 @@ CODER_PROMPT = (
     "the latest user request using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
-    "network access."
+    "network access. If a previous reviewer message said RETRY, fix the issues it "
+    "listed before re-running."
 )
 
 REVIEWER_PROMPT = (
@@ -199,8 +200,10 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
+    # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
+    # 而不是当作它自己先前的 assistant 输出。
     return {
-        "messages": [{"role": "assistant", "content": f"[reviewer] {verdict}"}],
+        "messages": [{"role": "user", "content": f"[reviewer] {verdict}"}],
         "attempts": state.get("attempts", 0) + 1,
         "done": verdict.startswith("DONE"),
     }
@@ -273,14 +276,13 @@ LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互
 | LangGraph | Cube Sandbox |
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
-| `config = {"configurable": {"thread_id": "t1"}}` | `State` 中的 `sandbox_id` |
+| `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `State` 中的 `sandbox_id` |
 | 用 `invoke(..., config)` 恢复 | `sandbox.pause()` 后 `Sandbox.connect(sandbox_id)` |
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
 checkpointer = MemorySaver()
-config = {"configurable": {"thread_id": "t1"}}
 
 
 def stage_input(messages, sandbox_id):
@@ -290,6 +292,9 @@ def stage_input(messages, sandbox_id):
 
 
 sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
+# 以 sandbox_id 作为 checkpoint 线程的键，使同一个 thread_id 在 pause() / connect()
+# 之后重新挂载到同一个 MicroVM。
+config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
     graph.invoke(stage_input([{"role": "user", "content": "first task"}],
@@ -297,7 +302,7 @@ try:
 
     sandbox.pause()                                   # 快照 VM + 根文件系统
     # Sandbox.connect() 返回的是新实例；run_python 闭包捕获的是暂停前的旧实例，
-    # 因此需要重新绑定工具并在新实例上重建图，同时保留同一个 checkpointer 以恢复 thread t1。
+    # 因此需要重新绑定工具并在新实例上重建图，同时保留同一个 checkpointer 以恢复同一 checkpoint 线程。
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # 恢复后 /workspace 保持不变
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
     graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}],

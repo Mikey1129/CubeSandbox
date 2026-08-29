@@ -153,7 +153,8 @@ CODER_PROMPT = (
     "the latest user request using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
-    "network access."
+    "network access. If a previous reviewer message said RETRY, fix the issues it "
+    "listed before re-running."
 )
 
 REVIEWER_PROMPT = (
@@ -207,8 +208,10 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
+    # Emit the verdict as a user-role message so the coder treats RETRY as a
+    # directive to fix, not as its own prior assistant output.
     return {
-        "messages": [{"role": "assistant", "content": f"[reviewer] {verdict}"}],
+        "messages": [{"role": "user", "content": f"[reviewer] {verdict}"}],
         "attempts": state.get("attempts", 0) + 1,
         "done": verdict.startswith("DONE"),
     }
@@ -284,14 +287,13 @@ long-running, resumable agents:
 | LangGraph | Cube Sandbox |
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
-| `config = {"configurable": {"thread_id": "t1"}}` | `sandbox_id` in `State` |
+| `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox_id` in `State` |
 | resume with `invoke(..., config)` | `sandbox.pause()` then `Sandbox.connect(sandbox_id)` |
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
 checkpointer = MemorySaver()
-config = {"configurable": {"thread_id": "t1"}}
 
 
 def stage_input(messages, sandbox_id):
@@ -303,6 +305,9 @@ def stage_input(messages, sandbox_id):
 
 
 sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
+# Key the checkpoint thread by the sandbox id so the same thread_id reattaches
+# to the same MicroVM across pause() / connect().
+config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
     graph.invoke(stage_input([{"role": "user", "content": "first task"}],
@@ -311,7 +316,7 @@ try:
     sandbox.pause()                                   # snapshot VM + rootfs
     # Sandbox.connect() returns a NEW instance; the run_python closure captured
     # the pre-pause one, so rebind the tool and rebuild the graph on the new
-    # instance, keeping the same checkpointer so thread t1 resumes.
+    # instance, keeping the same checkpointer so the same checkpoint thread resumes.
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
     graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}],
