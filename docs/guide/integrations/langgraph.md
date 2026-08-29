@@ -181,17 +181,24 @@ def extract_text(content) -> str:
 
 
 def strip_code_fence(text: str) -> str:
-    """Strip optional markdown code fences the model may wrap code in."""
+    """Return the code inside the first markdown fence, or the whole text when
+    there is none — models often prefix the fenced block with prose."""
     fence = "`" * 3                      # three backticks, without a literal fence
     text = text.strip()
-    if text.startswith(fence):
-        lines = text.splitlines()
-        if lines and lines[0].startswith(fence):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == fence:
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-    return text
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith(fence):
+            start = i
+            break
+    if start is None:
+        return text
+    inner = []
+    for line in lines[start + 1:]:
+        if line.strip().startswith(fence):
+            break
+        inner.append(line)
+    return "\n".join(inner).strip()
 
 
 def coder(state: AgentState, run_python) -> dict:
@@ -200,6 +207,9 @@ def coder(state: AgentState, run_python) -> dict:
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
     ).content))
     output = run_python(code)
+    # Cap the output so a huge result (e.g. a printed DataFrame) cannot blow the
+    # model's context window on the next llm.invoke.
+    output = output[:4000]
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
 
@@ -283,6 +293,10 @@ forever.
 LangGraph checkpoints the graph state; Cube snapshots the sandbox. The two pair naturally for
 long-running, resumable agents:
 
+> `MemorySaver` below keeps checkpoints in **process memory** — fine for a demo, but they are
+> gone when the process restarts. For cross-process resume, use a durable checkpointer such as
+> `SqliteSaver` / `PostgresSaver` from `langgraph-checkpoint-sqlite` / `-postgres`.
+
 | LangGraph | Cube Sandbox |
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
@@ -292,7 +306,7 @@ long-running, resumable agents:
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
-checkpointer = MemorySaver()
+checkpointer = MemorySaver()  # in-process demo; use a durable checkpointer for real resume
 
 
 def stage_input(messages):
@@ -323,7 +337,9 @@ finally:
 ```
 
 Keep the LangGraph `thread_id` aligned with the Cube `sandbox_id` (e.g. store both in your
-orchestration layer) so a resumed graph reattaches to the same sandbox.
+orchestration layer) so a resumed graph reattaches to the same sandbox. Because `MemorySaver` only
+survives within the current process, pair that orchestration layer with a durable checkpointer
+(`SqliteSaver` / `PostgresSaver`) to resume across restarts.
 
 ## Caveats
 
@@ -338,6 +354,9 @@ orchestration layer) so a resumed graph reattaches to the same sandbox.
   fails; bake pandas / numpy / matplotlib into the template.
 - **Cap the retry loop.** Use the `attempts` counter (as above) or LangGraph's recursion limit, so a
   reviewer that keeps asking for retries cannot exhaust the sandbox `timeout`.
+- **`MemorySaver` is in-process only.** Checkpoints live in memory and are lost on restart; use
+  `SqliteSaver` / `PostgresSaver` (from `langgraph-checkpoint-sqlite` / `-postgres`) for
+  cross-process resume, even though the Cube sandbox survives `pause()` / `connect()`.
 
 ## References
 

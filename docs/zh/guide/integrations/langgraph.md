@@ -172,17 +172,24 @@ def extract_text(content) -> str:
 
 
 def strip_code_fence(text: str) -> str:
-    """剥离模型可能包裹代码的 Markdown 围栏。"""
+    """返回第一个 Markdown 围栏内的代码；若没有围栏则返回原文。
+    模型常在围栏块前加上说明文字，因此不能假设回复以围栏开头。"""
     fence = "`" * 3                      # 三个反引号，避免字面量围栏
     text = text.strip()
-    if text.startswith(fence):
-        lines = text.splitlines()
-        if lines and lines[0].startswith(fence):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == fence:
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-    return text
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith(fence):
+            start = i
+            break
+    if start is None:
+        return text
+    inner = []
+    for line in lines[start + 1:]:
+        if line.strip().startswith(fence):
+            break
+        inner.append(line)
+    return "\n".join(inner).strip()
 
 
 def coder(state: AgentState, run_python) -> dict:
@@ -191,6 +198,8 @@ def coder(state: AgentState, run_python) -> dict:
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
     ).content))
     output = run_python(code)
+    # 截断输出，避免超大结果（如打印整个 DataFrame）在下一次 llm.invoke 时撑爆模型上下文窗口。
+    output = output[:4000]
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
 
@@ -271,6 +280,10 @@ python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month.
 
 LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互补，适合长时间、可恢复的 Agent：
 
+> 下面的 `MemorySaver` 把 checkpoint 存在**进程内存**里——适合 demo，但进程重启后即丢失。
+> 如需跨进程恢复，请改用持久化 checkpointer，例如 `langgraph-checkpoint-sqlite` /
+> `-postgres` 提供的 `SqliteSaver` / `PostgresSaver`。
+
 | LangGraph | Cube Sandbox |
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
@@ -280,7 +293,7 @@ LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
-checkpointer = MemorySaver()
+checkpointer = MemorySaver()  # 进程内 demo；真正的恢复需改用持久化 checkpointer
 
 
 def stage_input(messages):
@@ -308,7 +321,8 @@ finally:
 ```
 
 让 LangGraph 的 `thread_id` 与 Cube 的 `sandbox_id` 保持一致（例如都存放在你的编排层），这样恢复的图才能
-重新挂载到同一个沙箱上。
+重新挂载到同一个沙箱上。由于 `MemorySaver` 只在当前进程内有效，跨重启恢复还需把编排层与持久化
+checkpointer（`SqliteSaver` / `PostgresSaver`）配合使用。
 
 ## 注意事项
 
@@ -322,6 +336,9 @@ finally:
   matplotlib 烘焙进模板。
 - **给重试循环设上限。** 用 `attempts` 计数器（如上）或 LangGraph 的递归限制，避免一直要求重试的 reviewer
   耗尽沙箱的 `timeout`。
+- **`MemorySaver` 仅限进程内。** checkpoint 存在内存里，进程重启即丢失；即使 Cube 沙箱本身能在
+  `pause()` / `connect()` 后存续，跨进程恢复也需改用 `SqliteSaver` / `PostgresSaver`（来自
+  `langgraph-checkpoint-sqlite` / `-postgres`）。
 
 ## 参考资料
 
