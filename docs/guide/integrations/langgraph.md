@@ -163,11 +163,25 @@ REVIEWER_PROMPT = (
 )
 
 
+def strip_code_fence(text: str) -> str:
+    """Strip optional markdown code fences the model may wrap code in."""
+    fence = "`" * 3                      # three backticks, without a literal fence
+    text = text.strip()
+    if text.startswith(fence):
+        lines = text.splitlines()
+        if lines and lines[0].startswith(fence):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == fence:
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text
+
+
 def coder(state: AgentState, run_python) -> dict:
     """Ask the LLM for code, execute it in the Cube sandbox, append the output."""
-    code = llm.invoke(
+    code = strip_code_fence(llm.invoke(
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
-    ).content
+    ).content)
     output = run_python(code)
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
@@ -222,12 +236,14 @@ if __name__ == "__main__":
             "attempts": 0,
             "done": False,
         })
+        # The last message is the reviewer's verdict; print the code output
+        # instead so the user actually sees the computed numbers.
         for msg in reversed(result["messages"]):
-            if msg.content:
+            if msg.content and str(msg.content).startswith("[code output]"):
                 print(msg.content)
                 break
         else:
-            print("(no final answer)")
+            print("(no code output)")
 ```
 
 Run it:
@@ -258,14 +274,32 @@ long-running, resumable agents:
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
-graph = build_graph(run_python, checkpointer=MemorySaver())
+checkpointer = MemorySaver()
 config = {"configurable": {"thread_id": "t1"}}
 
-with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800) as sandbox:
-    graph.invoke(initial_input, config=config)      # checkpoint saved under thread_id t1
-    sandbox.pause()
-    sandbox = Sandbox.connect(sandbox.sandbox_id)   # /workspace intact after resume
-    graph.invoke(follow_up_input, config=config)    # resumes the same thread_id
+
+def stage_input(messages, sandbox_id):
+    """Build the graph input for one stage. `attempts`/`done` have no reducer,
+    so explicit values here overwrite whatever the checkpoint stored."""
+    return {"messages": messages, "sandbox_id": sandbox_id, "attempts": 0, "done": False}
+
+
+sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
+try:
+    graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
+    graph.invoke(stage_input([{"role": "user", "content": "first task"}],
+                             sandbox.sandbox_id), config=config)
+
+    sandbox.pause()                                   # snapshot VM + rootfs
+    # Sandbox.connect() returns a NEW instance; the run_python closure captured
+    # the pre-pause one, so rebind the tool and rebuild the graph on the new
+    # instance, keeping the same checkpointer so thread t1 resumes.
+    sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
+    graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
+    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}],
+                             sandbox.sandbox_id), config=config)
+finally:
+    sandbox.kill()
 ```
 
 Keep the LangGraph `thread_id` aligned with the Cube `sandbox_id` (e.g. store both in your

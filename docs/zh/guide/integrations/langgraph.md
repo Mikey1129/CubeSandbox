@@ -156,11 +156,25 @@ REVIEWER_PROMPT = (
 )
 
 
+def strip_code_fence(text: str) -> str:
+    """剥离模型可能包裹代码的 Markdown 围栏。"""
+    fence = "`" * 3                      # 三个反引号，避免字面量围栏
+    text = text.strip()
+    if text.startswith(fence):
+        lines = text.splitlines()
+        if lines and lines[0].startswith(fence):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == fence:
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return text
+
+
 def coder(state: AgentState, run_python) -> dict:
     """让 LLM 生成代码，在 Cube 沙箱内执行，并追加输出。"""
-    code = llm.invoke(
+    code = strip_code_fence(llm.invoke(
         [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
-    ).content
+    ).content)
     output = run_python(code)
     return {"messages": [{"role": "assistant", "content": f"[code output]\n{output}"}]}
 
@@ -215,12 +229,13 @@ if __name__ == "__main__":
             "attempts": 0,
             "done": False,
         })
+        # 最后一条消息是 reviewer 的判定；改为打印代码输出，让用户真正看到计算结果。
         for msg in reversed(result["messages"]):
-            if msg.content:
+            if msg.content and str(msg.content).startswith("[code output]"):
                 print(msg.content)
                 break
         else:
-            print("(no final answer)")
+            print("(no code output)")
 ```
 
 运行：
@@ -249,14 +264,30 @@ LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
-graph = build_graph(run_python, checkpointer=MemorySaver())
+checkpointer = MemorySaver()
 config = {"configurable": {"thread_id": "t1"}}
 
-with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800) as sandbox:
-    graph.invoke(initial_input, config=config)      # 在 thread_id 下保存 checkpoint
-    sandbox.pause()
-    sandbox = Sandbox.connect(sandbox.sandbox_id)   # 恢复后 /workspace 保持不变
-    graph.invoke(follow_up_input, config=config)    # 在同一 thread_id 上恢复
+
+def stage_input(messages, sandbox_id):
+    """构建单阶段的图输入。`attempts`/`done` 没有 reducer，显式传值会覆盖 checkpoint 里的旧值。"""
+    return {"messages": messages, "sandbox_id": sandbox_id, "attempts": 0, "done": False}
+
+
+sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
+try:
+    graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
+    graph.invoke(stage_input([{"role": "user", "content": "first task"}],
+                             sandbox.sandbox_id), config=config)
+
+    sandbox.pause()                                   # 快照 VM + 根文件系统
+    # Sandbox.connect() 返回的是新实例；run_python 闭包捕获的是暂停前的旧实例，
+    # 因此需要重新绑定工具并在新实例上重建图，同时保留同一个 checkpointer 以恢复 thread t1。
+    sandbox = Sandbox.connect(sandbox.sandbox_id)     # 恢复后 /workspace 保持不变
+    graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
+    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}],
+                             sandbox.sandbox_id), config=config)
+finally:
+    sandbox.kill()
 ```
 
 让 LangGraph 的 `thread_id` 与 Cube 的 `sandbox_id` 保持一致（例如都存放在你的编排层），这样恢复的图才能
@@ -275,7 +306,7 @@ with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800) as sa
 - **给重试循环设上限。** 用 `attempts` 计数器（如上）或 LangGraph 的递归限制，避免一直要求重试的 reviewer
   耗尽沙箱的 `timeout`。
 
-## References
+## 参考资料
 
 - LangChain 集成（`create_agent` 对应版本）：[`langchain.md`](./langchain.md)
 - 自定义模板镜像：[`docs/guide/tutorials/bring-your-own-image.md`](../tutorials/bring-your-own-image.md)
