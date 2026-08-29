@@ -20,6 +20,10 @@ Cube 暴露了**与 E2B 兼容的 API**，代码执行工具可以从 E2B 无缝
 `create_agent`，本文则用 `StateGraph` **显式**搭建图：由你掌控控制流、在节点间共享同一个沙箱，并把
 LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 
+本指南的可运行版本见
+[`examples/langgraph-integration`](https://github.com/TencentCloud/CubeSandbox/tree/master/examples/langgraph-integration)，
+它是下方代码清单的权威来源。
+
 ## LangGraph 与 `create_agent` 的对比
 
 | | `create_agent`（LangChain 指南） | 显式 `StateGraph`（本文） |
@@ -52,7 +56,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 - `cubesandbox` SDK 所需环境变量：`CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP`；
   CubeAPI 后端启用鉴权时还需 `CUBE_API_KEY`（未设置时 SDK 不发送鉴权头）。
 - Python 3.10+（示例使用 `str | None`、`Annotated` 及 `langchain-openai` 1.x）。
-- 经 `OPENAI_BASE_URL` / `OPENAI_API_KEY` 接入的 OpenAI 兼容 LLM 端点。
+- 经 `OPENAI_BASE_URL` / `OPENAI_API_KEY`（或 `TOKENHUB_API_KEY`）接入的 OpenAI 兼容 LLM 端点。
 
 ## 接入步骤
 
@@ -63,7 +67,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 用第 2 步要注册的 tag 构建并推送：
 
 ```bash
-docker build -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
+docker build --platform linux/amd64 -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
 docker push <your-registry>/langgraph-cube:latest
 ```
 
@@ -202,6 +206,7 @@ def strip_code_fence(text: str) -> str | None:
     for line in lines[start + 1:]:
         # 只有裸围栏（反引号加可选空白）才视为关闭；脚本内部像 ```markdown 这样的
         # 语言标签行要当作代码保留。
+        # （已知限制：docstring 里的裸 ``` 行仍会被提前当作关闭。）
         if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
             break
         inner.append(line)

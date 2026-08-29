@@ -114,6 +114,7 @@ def strip_code_fence(text: str) -> str | None:
     for line in lines[start + 1:]:
         # Only a bare fence (backticks plus optional whitespace) closes the block;
         # a language-tagged line like ```markdown inside the script stays code.
+        # (Known limit: a bare ``` line inside a docstring would still close early.)
         if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
             break
         inner.append(line)

@@ -22,6 +22,10 @@ LangChain guide uses the high-level `create_agent` helper, this guide builds the
 with `StateGraph`, so you control the control flow, share one sandbox across nodes, and can wire
 LangGraph checkpointing to Cube's `pause()` / `connect()`.
 
+A runnable version of this guide ships in
+[`examples/langgraph-integration`](https://github.com/TencentCloud/CubeSandbox/tree/master/examples/langgraph-integration),
+which is the source of truth for the code listings below.
+
 ## LangGraph vs `create_agent`
 
 | | `create_agent` (LangChain guide) | Explicit `StateGraph` (this guide) |
@@ -56,7 +60,7 @@ The prerequisites are identical to the LangChain guide — the same sandbox temp
 - `cubesandbox` SDK env vars: `CUBE_API_URL`, `CUBE_TEMPLATE_ID`, `CUBE_PROXY_NODE_IP`, plus
   `CUBE_API_KEY` when the CubeAPI backend has auth enabled (the SDK sends no auth header when unset).
 - Python 3.10+ (the sample uses `str | None`, `Annotated`, and `langchain-openai` 1.x).
-- An OpenAI-compatible LLM endpoint via `OPENAI_BASE_URL` / `OPENAI_API_KEY`.
+- An OpenAI-compatible LLM endpoint via `OPENAI_BASE_URL` / `OPENAI_API_KEY` (or `TOKENHUB_API_KEY`).
 
 ## Integration steps
 
@@ -68,7 +72,7 @@ the graph runs on the host and only *code execution* happens inside the sandbox.
 under the tag you will register in step 2:
 
 ```bash
-docker build -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
+docker build --platform linux/amd64 -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
 docker push <your-registry>/langgraph-cube:latest
 ```
 
@@ -213,6 +217,7 @@ def strip_code_fence(text: str) -> str | None:
     for line in lines[start + 1:]:
         # Only a bare fence (backticks plus optional whitespace) closes the block;
         # a language-tagged line like ```markdown inside the script stays code.
+        # (Known limit: a bare ``` line inside a docstring would still close early.)
         if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
             break
         inner.append(line)

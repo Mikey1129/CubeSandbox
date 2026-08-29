@@ -114,6 +114,7 @@ def strip_code_fence(text: str) -> str | None:
     for line in lines[start + 1:]:
         # Only a bare fence (backticks plus optional whitespace) closes the block;
         # a language-tagged line like ```markdown inside the script stays code.
+        # (Known limit: a bare ``` line inside a docstring would still close early.)
         if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
             break
         inner.append(line)
@@ -207,6 +208,18 @@ if __name__ == "__main__":
         # instance, keeping the same checkpointer so the same checkpoint thread resumes.
         sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
         graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-        graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}]), config=config)
+        result = graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}]), config=config)
+        # Print the second stage's code output so the resume is observable.
+        for msg in reversed(result["messages"]):
+            content = str(msg.content)
+            marker = "[code output]"
+            idx = content.find(marker)
+            if idx != -1:
+                print(content[idx:])
+                break
+        else:
+            print("(no code output)")
+        if not result["done"]:
+            print("\n(not verified: reviewer never returned DONE)")
     finally:
         sandbox.kill()
