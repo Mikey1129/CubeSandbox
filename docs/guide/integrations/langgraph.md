@@ -53,7 +53,9 @@ The prerequisites are identical to the LangChain guide — the same sandbox temp
 - A template image with the Python stack (pandas / numpy / matplotlib / scikit-learn) built and
   registered. Follow the LangChain guide's
   [template image](../integrations/langchain.md) steps, or reuse the same template id.
-- `cubesandbox` SDK env vars: `CUBE_API_URL`, `CUBE_TEMPLATE_ID`, `CUBE_PROXY_NODE_IP`.
+- `cubesandbox` SDK env vars: `CUBE_API_URL`, `CUBE_TEMPLATE_ID`, `CUBE_PROXY_NODE_IP`, plus
+  `CUBE_API_KEY` when the CubeAPI backend has auth enabled (the SDK sends no auth header when unset).
+- Python 3.10+ (the sample uses `str | None`, `Annotated`, and `langchain-openai` 1.x).
 - An OpenAI-compatible LLM endpoint via `OPENAI_BASE_URL` / `OPENAI_API_KEY`.
 
 ## Integration steps

@@ -49,7 +49,9 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 - 已部署 CubeSandbox，CubeAPI 可从 `http://<node>:3000` 访问。
 - 已构建并注册一个含 Python 栈（pandas / numpy / matplotlib / scikit-learn）的模板镜像。可参考
   LangChain 指南的[模板镜像](../integrations/langchain.md)步骤，或直接复用同一个 template id。
-- `cubesandbox` SDK 所需环境变量：`CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP`。
+- `cubesandbox` SDK 所需环境变量：`CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP`；
+  CubeAPI 后端启用鉴权时还需 `CUBE_API_KEY`（未设置时 SDK 不发送鉴权头）。
+- Python 3.10+（示例使用 `str | None`、`Annotated` 及 `langchain-openai` 1.x）。
 - 经 `OPENAI_BASE_URL` / `OPENAI_API_KEY` 接入的 OpenAI 兼容 LLM 端点。
 
 ## 接入步骤
