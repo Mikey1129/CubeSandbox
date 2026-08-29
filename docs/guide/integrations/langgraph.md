@@ -136,13 +136,14 @@ def make_run_python(sandbox: Sandbox):
 
     def run_python(code: str) -> str:
         script = f"/workspace/_agent_{next(_counter)}.py"
-        sandbox.files.write(script, code)
         try:
+            sandbox.files.write(script, code)
             result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
         except Exception as exc:
-            # Transport errors and per-command timeouts raise here; surface them as
-            # tool output so the reviewer can see the failure and decide to retry,
-            # rather than letting the exception abort the whole graph run.
+            # A dead sandbox, a failed write, transport errors and per-command
+            # timeouts all raise here; surface them as tool output so the reviewer
+            # can see the failure and decide to retry, rather than letting the
+            # exception abort the whole graph run.
             return f"[command error] {exc}"
         out = result.stdout
         if result.stderr:
@@ -231,12 +232,16 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
+    # Parse the first token so a markdown-wrapped or prose-led verdict
+    # ("**DONE**", "The result is DONE") still resolves correctly.
+    token = (verdict.split() or [""])[0].strip(":*#`")
+    done = token.startswith("DONE")
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
         "messages": [{"role": "user", "content": f"[reviewer] {verdict}"}],
         "attempts": state.get("attempts", 0) + 1,
-        "done": verdict.startswith("DONE"),
+        "done": done,
     }
 
 

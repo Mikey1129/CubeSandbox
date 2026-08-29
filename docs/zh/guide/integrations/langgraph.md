@@ -128,12 +128,12 @@ def make_run_python(sandbox: Sandbox):
 
     def run_python(code: str) -> str:
         script = f"/workspace/_agent_{next(_counter)}.py"
-        sandbox.files.write(script, code)
         try:
+            sandbox.files.write(script, code)
             result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
         except Exception as exc:
-            # 传输错误和单命令超时会在这里抛异常；把它作为工具输出返回，
-            # 让 reviewer 能看到失败并决定重试，而不是让异常直接终止整张图的运行。
+            # 沙箱已死、写入失败、传输错误和单命令超时都会在这里抛异常；把它作为
+            # 工具输出返回，让 reviewer 能看到失败并决定重试，而不是让异常直接终止整张图的运行。
             return f"[command error] {exc}"
         out = result.stdout
         if result.stderr:
@@ -219,12 +219,16 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
+    # 解析第一个 token，这样被 markdown 包裹或前面带散文的判定
+    # （"**DONE**"、"The result is DONE"）也能正确识别。
+    token = (verdict.split() or [""])[0].strip(":*#`")
+    done = token.startswith("DONE")
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {
         "messages": [{"role": "user", "content": f"[reviewer] {verdict}"}],
         "attempts": state.get("attempts", 0) + 1,
-        "done": verdict.startswith("DONE"),
+        "done": done,
     }
 
 
