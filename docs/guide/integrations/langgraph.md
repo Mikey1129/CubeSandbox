@@ -235,9 +235,11 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # Scan every whitespace-delimited token so a markdown-wrapped or prose-led
-    # verdict ("**DONE**", "The result is DONE") still resolves to DONE.
-    done = any(t.strip(":*#`").startswith("DONE") for t in verdict.split())
+    # The prompt asks for exactly one leading word (DONE/RETRY), so classify on
+    # the first token only — stripping markdown decoration — rather than scanning
+    # the whole reply, where a RETRY explanation containing "done" would misfire.
+    first = (verdict.split() or [""])[0].strip(":*#`")
+    done = first.startswith("DONE")
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
@@ -300,7 +302,7 @@ if __name__ == "__main__":
 Save the code above as `langgraph_agent_demo.py`, then run it:
 
 ```bash
-pip install langgraph langchain-openai cubesandbox python-dotenv
+pip install "langgraph>=0.2,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 

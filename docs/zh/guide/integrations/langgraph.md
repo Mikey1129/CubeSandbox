@@ -222,9 +222,10 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # 扫描每个空白分隔的 token，这样被 markdown 包裹或前面带散文的判定
-    # （"**DONE**"、"The result is DONE"）也能正确识别为 DONE。
-    done = any(t.strip(":*#`").startswith("DONE") for t in verdict.split())
+    # prompt 要求回复以一个判定词（DONE/RETRY）开头，所以只按第一个 token 判定，
+    # 并剥离 markdown 装饰；不要扫描整句，否则 RETRY 的解释文字里出现 "done" 会误判。
+    first = (verdict.split() or [""])[0].strip(":*#`")
+    done = first.startswith("DONE")
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {
@@ -286,7 +287,7 @@ if __name__ == "__main__":
 将上面的代码保存为 `langgraph_agent_demo.py`，然后运行：
 
 ```bash
-pip install langgraph langchain-openai cubesandbox python-dotenv
+pip install "langgraph>=0.2,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 
