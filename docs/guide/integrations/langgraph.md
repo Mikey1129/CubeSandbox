@@ -209,7 +209,9 @@ def strip_code_fence(text: str) -> str | None:
         return None
     inner = []
     for line in lines[start + 1:]:
-        if line.strip().startswith(fence):
+        # Only a bare fence (backticks plus optional whitespace) closes the block;
+        # a language-tagged line like ```markdown inside the script stays code.
+        if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
             break
         inner.append(line)
     return "\n".join(inner).strip()
@@ -246,7 +248,7 @@ def reviewer(state: AgentState) -> dict:
     # the first token only — stripping markdown decoration — rather than scanning
     # the whole reply, where a RETRY explanation containing "done" would misfire.
     first = (verdict.split() or [""])[0].strip(":*#`")
-    done = first.startswith("DONE")
+    done = first.rstrip(".,!?;") == "DONE"
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {

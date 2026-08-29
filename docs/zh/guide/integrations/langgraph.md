@@ -198,7 +198,9 @@ def strip_code_fence(text: str) -> str | None:
         return None
     inner = []
     for line in lines[start + 1:]:
-        if line.strip().startswith(fence):
+        # 只有裸围栏（反引号加可选空白）才视为关闭；脚本内部像 ```markdown 这样的
+        # 语言标签行要当作代码保留。
+        if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
             break
         inner.append(line)
     return "\n".join(inner).strip()
@@ -232,7 +234,7 @@ def reviewer(state: AgentState) -> dict:
     # prompt 要求回复以一个判定词（DONE/RETRY）开头，所以只按第一个 token 判定，
     # 并剥离 markdown 装饰；不要扫描整句，否则 RETRY 的解释文字里出现 "done" 会误判。
     first = (verdict.split() or [""])[0].strip(":*#`")
-    done = first.startswith("DONE")
+    done = first.rstrip(".,!?;") == "DONE"
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {
