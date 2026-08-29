@@ -28,7 +28,7 @@ LangGraph checkpointing to Cube's `pause()` / `connect()`.
 |---|---|---|
 | Graph shape | Fixed tool-calling loop, hidden from you | You define every node and edge |
 | Retry / loops | Implicit in the agent loop | Explicit `add_conditional_edges` |
-| State | Opaque message history | Typed `State` you design (sandbox id, attempts, verdict…) |
+| State | Opaque message history | Typed `State` you design (attempts, verdict…) |
 | Resume | Not directly exposed | `checkpointer` ↔ Cube `pause()` / `connect()` |
 
 Use `create_agent` when you just need a tool-calling agent. Reach for an explicit `StateGraph` when
@@ -84,8 +84,9 @@ The graph has three moving parts:
 - **`reviewer`** — asks the LLM whether the output answers the request.
 - **a conditional edge** — routes `reviewer` back to `coder` (retry) or to `END`.
 
-One sandbox is created for the whole run and reused across every `coder` invocation; its id is kept
-in `State` so it survives across nodes and can be resumed later.
+One sandbox is created for the whole run and reused across every `coder` invocation. The graph holds
+it through the `run_python` closure (not through `State`); its id is the key you use to resume the
+run later via checkpointing.
 
 ```python
 from __future__ import annotations
@@ -121,10 +122,9 @@ llm = ChatOpenAI(
 
 class AgentState(TypedDict):
     """State shared across nodes. `messages` accumulates the conversation;
-    `sandbox_id` pins one MicroVM for the whole graph run so `pause()` /
-    `connect()` can resume it later."""
+    `attempts` / `done` drive the retry loop. The sandbox itself is shared
+    through the `run_python` closure, not through `State`."""
     messages: Annotated[list, add_messages]
-    sandbox_id: str
     attempts: int
     done: bool
 
@@ -159,8 +159,8 @@ CODER_PROMPT = (
 
 REVIEWER_PROMPT = (
     "You are a reviewer. Given the user request and the latest code output, decide "
-    "whether the request is fully answered. Reply with exactly one word: DONE if the "
-    "output answers the request, otherwise RETRY followed by one line on what is missing."
+    "whether the request is fully answered. Reply starting with exactly one word, "
+    "`DONE` or `RETRY`, optionally followed by one line explaining what is missing."
 )
 
 
@@ -251,7 +251,6 @@ if __name__ == "__main__":
         graph = build_graph(run_python)
         result = graph.invoke({
             "messages": [{"role": "user", "content": question}],
-            "sandbox_id": sandbox.sandbox_id,
             "attempts": 0,
             "done": False,
         })
@@ -265,7 +264,7 @@ if __name__ == "__main__":
             print("(no code output)")
 ```
 
-Run it:
+Save the code above as `langgraph_agent_demo.py`, then run it:
 
 ```bash
 pip install langgraph langchain-openai cubesandbox python-dotenv
@@ -287,7 +286,7 @@ long-running, resumable agents:
 | LangGraph | Cube Sandbox |
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
-| `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox_id` in `State` |
+| `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox.sandbox_id` |
 | resume with `invoke(..., config)` | `sandbox.pause()` then `Sandbox.connect(sandbox_id)` |
 
 ```python
@@ -296,12 +295,12 @@ from langgraph.checkpoint.memory import MemorySaver
 checkpointer = MemorySaver()
 
 
-def stage_input(messages, sandbox_id):
+def stage_input(messages):
     """Build the graph input for one stage. `attempts`/`done` have no reducer,
     so explicit values here overwrite whatever the checkpoint stored. `messages`
     uses `add_messages`, so new messages are APPENDED to the prior history —
     use a fresh thread_id if you want a clean slate."""
-    return {"messages": messages, "sandbox_id": sandbox_id, "attempts": 0, "done": False}
+    return {"messages": messages, "attempts": 0, "done": False}
 
 
 sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
@@ -310,8 +309,7 @@ sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
 config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "first task"}],
-                             sandbox.sandbox_id), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "first task"}]), config=config)
 
     sandbox.pause()                                   # snapshot VM + rootfs
     # Sandbox.connect() returns a NEW instance; the run_python closure captured
@@ -319,8 +317,7 @@ try:
     # instance, keeping the same checkpointer so the same checkpoint thread resumes.
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}],
-                             sandbox.sandbox_id), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}]), config=config)
 finally:
     sandbox.kill()
 ```

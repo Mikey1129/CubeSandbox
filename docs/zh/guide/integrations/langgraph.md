@@ -26,7 +26,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 |---|---|---|
 | 图结构 | 固定的工具调用循环，对你是黑盒 | 每个节点、每条边都由你定义 |
 | 重试 / 循环 | 隐含在 Agent 循环内部 | 显式的 `add_conditional_edges` |
-| 状态 | 不透明的消息历史 | 你设计的类型化 `State`（沙箱 id、重试次数、判定结果…） |
+| 状态 | 不透明的消息历史 | 你设计的类型化 `State`（重试次数、判定结果…） |
 | 恢复 | 不直接暴露 | `checkpointer` 对接 Cube 的 `pause()` / `connect()` |
 
 当你只需要一个能调用工具的 Agent 时，用 `create_agent` 即可。当你想构建「生成 → 执行 → 审查 → 重试」
@@ -79,7 +79,7 @@ cubemastercli tpl create-from-image \
 - **`reviewer`** —— 让 LLM 判断输出是否回答了请求。
 - **一条条件边** —— 将 `reviewer` 路由回 `coder`（重试）或路由到 `END`。
 
-整个运行只创建一个沙箱，并在每次 `coder` 调用间复用；其 id 保存在 `State` 中，从而跨节点存续、之后可恢复。
+整个运行只创建一个沙箱，并在每次 `coder` 调用间复用；图通过 `run_python` 闭包持有它（而非通过 `State`），它的 id 正是之后通过 checkpoint 恢复运行所需的键。
 
 ```python
 from __future__ import annotations
@@ -114,10 +114,9 @@ llm = ChatOpenAI(
 
 
 class AgentState(TypedDict):
-    """跨节点共享的状态。`messages` 累积对话；`sandbox_id` 将同一个 MicroVM
-    固定到整个图运行期间，以便之后用 `pause()` / `connect()` 恢复。"""
+    """跨节点共享的状态。`messages` 累积对话；`attempts` / `done` 驱动重试循环。
+    沙箱本身通过 `run_python` 闭包共享，而非通过 `State`。"""
     messages: Annotated[list, add_messages]
-    sandbox_id: str
     attempts: int
     done: bool
 
@@ -152,8 +151,8 @@ CODER_PROMPT = (
 
 REVIEWER_PROMPT = (
     "You are a reviewer. Given the user request and the latest code output, decide "
-    "whether the request is fully answered. Reply with exactly one word: DONE if the "
-    "output answers the request, otherwise RETRY followed by one line on what is missing."
+    "whether the request is fully answered. Reply starting with exactly one word, "
+    "`DONE` or `RETRY`, optionally followed by one line explaining what is missing."
 )
 
 
@@ -243,7 +242,6 @@ if __name__ == "__main__":
         graph = build_graph(run_python)
         result = graph.invoke({
             "messages": [{"role": "user", "content": question}],
-            "sandbox_id": sandbox.sandbox_id,
             "attempts": 0,
             "done": False,
         })
@@ -256,7 +254,7 @@ if __name__ == "__main__":
             print("(no code output)")
 ```
 
-运行：
+将上面的代码保存为 `langgraph_agent_demo.py`，然后运行：
 
 ```bash
 pip install langgraph langchain-openai cubesandbox python-dotenv
@@ -276,7 +274,7 @@ LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互
 | LangGraph | Cube Sandbox |
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
-| `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `State` 中的 `sandbox_id` |
+| `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox.sandbox_id` |
 | 用 `invoke(..., config)` 恢复 | `sandbox.pause()` 后 `Sandbox.connect(sandbox_id)` |
 
 ```python
@@ -285,10 +283,10 @@ from langgraph.checkpoint.memory import MemorySaver
 checkpointer = MemorySaver()
 
 
-def stage_input(messages, sandbox_id):
+def stage_input(messages):
     """构建单阶段的图输入。`attempts`/`done` 没有 reducer，显式传值会覆盖 checkpoint 里的旧值；
     `messages` 使用 `add_messages`，新消息会追加到之前的历史——若想从干净状态开始，请换新的 thread_id。"""
-    return {"messages": messages, "sandbox_id": sandbox_id, "attempts": 0, "done": False}
+    return {"messages": messages, "attempts": 0, "done": False}
 
 
 sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
@@ -297,16 +295,14 @@ sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
 config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "first task"}],
-                             sandbox.sandbox_id), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "first task"}]), config=config)
 
     sandbox.pause()                                   # 快照 VM + 根文件系统
     # Sandbox.connect() 返回的是新实例；run_python 闭包捕获的是暂停前的旧实例，
     # 因此需要重新绑定工具并在新实例上重建图，同时保留同一个 checkpointer 以恢复同一 checkpoint 线程。
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # 恢复后 /workspace 保持不变
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}],
-                             sandbox.sandbox_id), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}]), config=config)
 finally:
     sandbox.kill()
 ```
