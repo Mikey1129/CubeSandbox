@@ -58,6 +58,12 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 
 复用 LangChain 指南的 `Dockerfile`（在 `cubesandbox-base` 之上叠加 Python 数据科学栈，envd 监听
 `:49983`）。镜像里无需烘焙任何 LangGraph 专属依赖——图在宿主机上运行，只有**代码执行**发生在沙箱内。
+用第 2 步要注册的 tag 构建并推送：
+
+```bash
+docker build -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
+docker push <your-registry>/langgraph-cube:latest
+```
 
 ### 2. 注册模板并配置环境变量
 
@@ -150,7 +156,8 @@ CODER_PROMPT = (
     "the latest user request using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
-    "network access. If a previous reviewer message said RETRY, fix the issues it "
+    "network access. Wrap the script in a single markdown ```python ... ``` fenced "
+    "block. If a previous reviewer message said RETRY, fix the issues it "
     "listed before re-running."
 )
 

@@ -62,7 +62,13 @@ The prerequisites are identical to the LangChain guide — the same sandbox temp
 
 Reuse the LangChain guide's `Dockerfile` (a Python data-science stack layered on `cubesandbox-base`,
 with envd listening on `:49983`). No LangGraph-specific packages need to be baked into the image —
-the graph runs on the host and only *code execution* happens inside the sandbox.
+the graph runs on the host and only *code execution* happens inside the sandbox. Build and push it
+under the tag you will register in step 2:
+
+```bash
+docker build -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
+docker push <your-registry>/langgraph-cube:latest
+```
 
 ### 2. Register the template and configure env vars
 
@@ -160,7 +166,8 @@ CODER_PROMPT = (
     "the latest user request using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
-    "network access. If a previous reviewer message said RETRY, fix the issues it "
+    "network access. Wrap the script in a single markdown ```python ... ``` fenced "
+    "block. If a previous reviewer message said RETRY, fix the issues it "
     "listed before re-running."
 )
 
