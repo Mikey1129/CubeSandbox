@@ -289,6 +289,8 @@ if __name__ == "__main__":
                 break
         else:
             print("(no code output)")
+        if not result["done"]:
+            print("\n(not verified: reviewer never returned DONE)")
 ```
 
 将上面的代码保存为 `langgraph_agent_demo.py`，然后运行：
@@ -316,7 +318,7 @@ LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
 | `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox.sandbox_id` |
-| 用 `invoke(..., config)` 恢复 | `sandbox.pause()` 后 `Sandbox.connect(sandbox_id)` |
+| 在同一 thread 上用 `invoke(..., config)` 开始新一轮 | `sandbox.pause()` 后 `Sandbox.connect(sandbox_id)` |
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver

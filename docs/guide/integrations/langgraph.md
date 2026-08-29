@@ -304,6 +304,8 @@ if __name__ == "__main__":
                 break
         else:
             print("(no code output)")
+        if not result["done"]:
+            print("\n(not verified: reviewer never returned DONE)")
 ```
 
 Save the code above as `langgraph_agent_demo.py`, then run it:
@@ -333,7 +335,7 @@ long-running, resumable agents:
 |---|---|
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
 | `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox.sandbox_id` |
-| resume with `invoke(..., config)` | `sandbox.pause()` then `Sandbox.connect(sandbox_id)` |
+| continue a new run on the same thread via `invoke(..., config)` | `sandbox.pause()` then `Sandbox.connect(sandbox_id)` |
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver
