@@ -30,7 +30,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 | 恢复 | 不直接暴露 | `checkpointer` 对接 Cube 的 `pause()` / `connect()` |
 
 当你只需要一个能调用工具的 Agent 时，用 `create_agent` 即可。当你想构建「生成 → 执行 → 审查 → 重试」
-这样的多步工作流、让沙箱跨阶段复用、并在图中途可恢复时，请使用显式的 `StateGraph`。
+这样的多步工作流、让沙箱跨阶段复用、并在之后可通过 checkpoint 恢复运行时，请使用显式的 `StateGraph`。
 
 ## 集成对象与版本
 
@@ -129,7 +129,12 @@ def make_run_python(sandbox: Sandbox):
     def run_python(code: str) -> str:
         script = f"/workspace/_agent_{next(_counter)}.py"
         sandbox.files.write(script, code)
-        result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
+        try:
+            result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
+        except Exception as exc:
+            # 传输错误和单命令超时会在这里抛异常；把它作为工具输出返回，
+            # 让 reviewer 能看到失败并决定重试，而不是让异常直接终止整张图的运行。
+            return f"[command error] {exc}"
         out = result.stdout
         if result.stderr:
             out += "\n--- stderr ---\n" + result.stderr

@@ -33,7 +33,7 @@ LangGraph checkpointing to Cube's `pause()` / `connect()`.
 
 Use `create_agent` when you just need a tool-calling agent. Reach for an explicit `StateGraph` when
 you want a multi-step workflow — generate → execute → review → retry — with the sandbox shared across
-stages and the run resumable mid-graph.
+stages and the run resumable later via checkpointing.
 
 ## Components and versions
 
@@ -137,7 +137,13 @@ def make_run_python(sandbox: Sandbox):
     def run_python(code: str) -> str:
         script = f"/workspace/_agent_{next(_counter)}.py"
         sandbox.files.write(script, code)
-        result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
+        try:
+            result = sandbox.commands.run(f"python3 {script}", timeout=120, cwd="/workspace")
+        except Exception as exc:
+            # Transport errors and per-command timeouts raise here; surface them as
+            # tool output so the reviewer can see the failure and decide to retry,
+            # rather than letting the exception abort the whole graph run.
+            return f"[command error] {exc}"
         out = result.stdout
         if result.stderr:
             out += "\n--- stderr ---\n" + result.stderr
