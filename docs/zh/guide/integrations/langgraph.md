@@ -62,12 +62,12 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 
 ### 1. 构建模板镜像
 
-复用 LangChain 指南的 `Dockerfile`（在 `cubesandbox-base` 之上叠加 Python 数据科学栈，envd 监听
+使用随附的 `examples/langgraph-integration/Dockerfile`（在 `cubesandbox-base` 之上叠加 Python 数据科学栈，envd 监听
 `:49983`）。镜像里无需烘焙任何 LangGraph 专属依赖——图在宿主机上运行，只有**代码执行**发生在沙箱内。
 用第 2 步要注册的 tag 构建并推送：
 
 ```bash
-docker build --platform linux/amd64 -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
+docker build --platform linux/amd64 -t <your-registry>/langgraph-cube:latest examples/langgraph-integration
 docker push <your-registry>/langgraph-cube:latest
 ```
 

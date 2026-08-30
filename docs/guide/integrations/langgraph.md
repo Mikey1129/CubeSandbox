@@ -66,13 +66,13 @@ The prerequisites are identical to the LangChain guide — the same sandbox temp
 
 ### 1. Build the template image
 
-Reuse the LangChain guide's `Dockerfile` (a Python data-science stack layered on `cubesandbox-base`,
+Use the shipped `examples/langgraph-integration/Dockerfile` (a Python data-science stack layered on `cubesandbox-base`,
 with envd listening on `:49983`). No LangGraph-specific packages need to be baked into the image —
 the graph runs on the host and only *code execution* happens inside the sandbox. Build and push it
 under the tag you will register in step 2:
 
 ```bash
-docker build --platform linux/amd64 -t <your-registry>/langgraph-cube:latest <path-to-dockerfile>
+docker build --platform linux/amd64 -t <your-registry>/langgraph-cube:latest examples/langgraph-integration
 docker push <your-registry>/langgraph-cube:latest
 ```
 
