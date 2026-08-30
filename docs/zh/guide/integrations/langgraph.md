@@ -219,24 +219,32 @@ def strip_code_fence(text: str) -> str | None:
         return None                      # 只有开启符没有正文——视为无代码
     inner = []
     for line in after[first_nl + 1:].splitlines():
-        # 关闭符：该行开头的反引号连串长度与开启符一致，且其后只有文字——
-        # 模型偶尔会滑成 `` ``` Done! ``。docstring 内较短的裸 ``` 行，或开启
-        # 符为 3 反引号时出现的 4 反引号围栏，都当作代码保留。
-        s = line.strip()
-        run = 0
-        while run < len(s) and s[run] == "`":
-            run += 1
-        if run == fence_len and (len(s) == run or s[run].isspace()):
-            break
+        # 关闭符必须是顶格（column 0）、开头反引号连串长度与开启符一致且其后只有文字——
+        # 模型偶尔会滑成 `` ``` Done! ``。docstring 或字符串字面量里缩进的围栏、较短的
+        # 裸 ``` 行，或开启符为 3 反引号时出现的 4 反引号围栏，都当作代码保留。
+        if line.startswith("`"):
+            s = line.strip()
+            run = 0
+            while run < len(s) and s[run] == "`":
+                run += 1
+            if run == fence_len and (len(s) == run or s[run].isspace()):
+                break
         inner.append(line)
     return "\n".join(inner).strip() or None  # 空围栏（```\n```）视为无代码
 
 
 def coder(state: AgentState, run_python) -> dict:
     """让 LLM 生成代码，在 Cube 沙箱内执行，并追加输出。"""
-    code = strip_code_fence(extract_text(llm.invoke(
-        [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
-    ).content))
+    try:
+        reply = llm.invoke(
+            [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
+        ).content
+    except Exception as exc:
+        # 瞬时 LLM 错误（限流、5xx、超时）不应中止整个图运行；当作空代码提示，
+        # 让 reviewer 重试。
+        return {"messages": [{"role": "assistant",
+                              "content": f"[code output]\n(llm error: {exc})"}]}
+    code = strip_code_fence(extract_text(reply))
     if code is None:
         # 模型没有返回围栏代码块；直接提示，而不是把散文写进 .py 文件、浪费一次重试机会。
         return {"messages": [{"role": "assistant",
@@ -264,13 +272,23 @@ def coder(state: AgentState, run_python) -> dict:
 
 def reviewer(state: AgentState) -> dict:
     """判断最新输出是否回答了请求。"""
-    verdict = extract_text(llm.invoke(
-        [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
-    ).content).strip().upper()
-    # 以完整 token 列表为权威：回复中任何位置的显式 RETRY 都优先于 DONE——prompt 要求回复以一个
-    # 判定词开头，因此 RETRY 解释文字里的 "DONE" 不应停止循环；只有不存在 RETRY 时才判定为 DONE。
-    tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
-    done = "DONE" in tokens and "RETRY" not in tokens
+    try:
+        reply = llm.invoke(
+            [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
+        ).content
+    except Exception as exc:
+        # reviewer 里的瞬时 LLM 错误降级为一次重试，而不是中止整个运行。
+        return {
+            "messages": [{"role": "user", "content": f"[reviewer] RETRY (llm error: {exc})"}],
+            "attempts": state.get("attempts", 0) + 1,
+            "done": False,
+        }
+    verdict = extract_text(reply).strip().upper()
+    # prompt 要求回复以一个判定词开头，因此只解析第一个 token——解释文字里出现的
+    # "DONE"/"RETRY" 是补充说明，不是第二个判定。这样既能避免 RETRY 解释里的 "DONE"
+    # 提前停掉循环，也能避免 "I would not RETRY" 让正确答案被重跑。
+    first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;")
+    done = first == "DONE"
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {

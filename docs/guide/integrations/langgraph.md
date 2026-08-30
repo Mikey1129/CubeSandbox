@@ -232,25 +232,34 @@ def strip_code_fence(text: str) -> str | None:
         return None                      # opener with no body — treat as no code
     inner = []
     for line in after[first_nl + 1:].splitlines():
-        # A closer is a line whose leading backtick run matches the opener's
-        # length and is followed by nothing but prose — models sometimes slip as
-        # `` ``` Done! ``. A shorter bare ``` line inside a docstring, or a
-        # 4-backtick fence when the opener was 3, stays code.
-        s = line.strip()
-        run = 0
-        while run < len(s) and s[run] == "`":
-            run += 1
-        if run == fence_len and (len(s) == run or s[run].isspace()):
-            break
+        # A closer is a column-0 line whose leading backtick run matches the
+        # opener's length and is followed by nothing but prose — models sometimes
+        # slip as `` ``` Done! ``. An indented fence inside a docstring or string
+        # literal, a shorter bare ``` line, or a 4-backtick fence when the opener
+        # was 3, all stay code.
+        if line.startswith("`"):
+            s = line.strip()
+            run = 0
+            while run < len(s) and s[run] == "`":
+                run += 1
+            if run == fence_len and (len(s) == run or s[run].isspace()):
+                break
         inner.append(line)
     return "\n".join(inner).strip() or None  # empty fence (```\n```) counts as no code
 
 
 def coder(state: AgentState, run_python) -> dict:
     """Ask the LLM for code, execute it in the Cube sandbox, append the output."""
-    code = strip_code_fence(extract_text(llm.invoke(
-        [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
-    ).content))
+    try:
+        reply = llm.invoke(
+            [{"role": "system", "content": CODER_PROMPT}, *state["messages"]]
+        ).content
+    except Exception as exc:
+        # A transient LLM error (rate limit, 5xx, timeout) must not abort the
+        # whole graph run; surface it as empty code so the reviewer retries.
+        return {"messages": [{"role": "assistant",
+                              "content": f"[code output]\n(llm error: {exc})"}]}
+    code = strip_code_fence(extract_text(reply))
     if code is None:
         # The model returned no fenced code block; surface that instead of writing
         # prose to a .py file and wasting an attempt on a SyntaxError.
@@ -281,15 +290,25 @@ def coder(state: AgentState, run_python) -> dict:
 
 def reviewer(state: AgentState) -> dict:
     """Judge whether the latest output answers the request."""
-    verdict = extract_text(llm.invoke(
-        [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
-    ).content).strip().upper()
-    # Treat the full token list as authoritative: an explicit RETRY anywhere in
-    # the reply wins over DONE — the prompt asks for a single leading verdict
-    # word, so a stray "DONE" inside a RETRY explanation must not stop the loop.
-    # DONE only wins when no RETRY token is present.
-    tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
-    done = "DONE" in tokens and "RETRY" not in tokens
+    try:
+        reply = llm.invoke(
+            [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
+        ).content
+    except Exception as exc:
+        # A transient LLM error in the reviewer degrades to a retry rather than
+        # aborting the run.
+        return {
+            "messages": [{"role": "user", "content": f"[reviewer] RETRY (llm error: {exc})"}],
+            "attempts": state.get("attempts", 0) + 1,
+            "done": False,
+        }
+    verdict = extract_text(reply).strip().upper()
+    # The prompt asks for a single leading verdict word, so parse only the first
+    # token — a "DONE"/"RETRY" later in the explanation is prose, not a second
+    # verdict. This avoids both a stray "DONE" in a RETRY explanation stopping
+    # the loop and an "I would not RETRY" re-running a correct answer.
+    first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;")
+    done = first == "DONE"
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
