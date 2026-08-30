@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import itertools
 import os
 import sys
@@ -66,12 +67,12 @@ def make_run_python(sandbox: Sandbox):
 
 CODER_PROMPT = (
     "You are a data analyst. Write a single self-contained Python script that answers "
-    "the latest user request using the dataset at /workspace/sales.csv "
+    "the user's task using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
     "network access. Wrap the script in a single markdown ```python ... ``` fenced "
-    "block. If a previous reviewer message said RETRY, fix the issues it "
-    "listed before re-running."
+    "block. Messages prefixed with [reviewer] are feedback on your last attempt, "
+    "not a new task: if one said RETRY, fix the issues it listed before re-running."
 )
 
 REVIEWER_PROMPT = (
@@ -150,6 +151,14 @@ def coder(state: AgentState, run_python) -> dict:
         # prose to a .py file and wasting an attempt on a SyntaxError.
         return {"messages": [{"role": "assistant",
                               "content": "[code output]\n(no code block in model reply)"}]}
+    try:
+        ast.parse(code)
+    except SyntaxError as exc:
+        # The fenced block isn't valid Python (e.g. the model prefaced the real
+        # script with a diff/example fence); surface it so the reviewer retries
+        # instead of writing a .py that always fails.
+        return {"messages": [{"role": "assistant",
+                              "content": f"[code output]\n(extracted block is not valid Python: {exc})"}]}
     output = run_python(code)
     # Cap both the code and the output so a huge result (e.g. a printed DataFrame)
     # or a large generated script cannot blow the model's context window across

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import itertools
 import os
 from typing import Annotated, TypedDict
@@ -66,12 +67,12 @@ def make_run_python(sandbox: Sandbox):
 
 CODER_PROMPT = (
     "You are a data analyst. Write a single self-contained Python script that answers "
-    "the latest user request using the dataset at /workspace/sales.csv "
+    "the user's task using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
     "network access. Wrap the script in a single markdown ```python ... ``` fenced "
-    "block. If a previous reviewer message said RETRY, fix the issues it "
-    "listed before re-running."
+    "block. Messages prefixed with [reviewer] are feedback on your last attempt, "
+    "not a new task: if one said RETRY, fix the issues it listed before re-running."
 )
 
 REVIEWER_PROMPT = (
@@ -150,6 +151,14 @@ def coder(state: AgentState, run_python) -> dict:
         # prose to a .py file and wasting an attempt on a SyntaxError.
         return {"messages": [{"role": "assistant",
                               "content": "[code output]\n(no code block in model reply)"}]}
+    try:
+        ast.parse(code)
+    except SyntaxError as exc:
+        # The fenced block isn't valid Python (e.g. the model prefaced the real
+        # script with a diff/example fence); surface it so the reviewer retries
+        # instead of writing a .py that always fails.
+        return {"messages": [{"role": "assistant",
+                              "content": f"[code output]\n(extracted block is not valid Python: {exc})"}]}
     output = run_python(code)
     # Cap both the code and the output so a huge result (e.g. a printed DataFrame)
     # or a large generated script cannot blow the model's context window across
@@ -223,7 +232,7 @@ if __name__ == "__main__":
     config = {"configurable": {"thread_id": sandbox.sandbox_id}}
     try:
         graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-        graph.invoke(stage_input([{"role": "user", "content": "first task"}]), config=config)
+        graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and report the month -> revenue numbers."}]), config=config)
 
         sandbox.pause()                                   # snapshot VM + rootfs
         # Sandbox.connect() returns a NEW instance; the run_python closure captured
@@ -231,7 +240,7 @@ if __name__ == "__main__":
         # instance, keeping the same checkpointer so the same checkpoint thread resumes.
         sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
         graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-        result = graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}]), config=config)
+        result = graph.invoke(stage_input([{"role": "user", "content": "now compute average units per product"}]), config=config)
         # Print the second stage's code output so the resume is observable.
         for msg in reversed(result["messages"]):
             content = str(msg.content)

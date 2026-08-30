@@ -97,6 +97,7 @@ cubemastercli tpl create-from-image \
 ```python
 from __future__ import annotations
 
+import ast
 import itertools
 import os
 import sys
@@ -160,12 +161,12 @@ def make_run_python(sandbox: Sandbox):
 
 CODER_PROMPT = (
     "You are a data analyst. Write a single self-contained Python script that answers "
-    "the latest user request using the dataset at /workspace/sales.csv "
+    "the user's task using the dataset at /workspace/sales.csv "
     "(columns month,product,units,price). The environment has pandas, numpy, "
     "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
     "network access. Wrap the script in a single markdown ```python ... ``` fenced "
-    "block. If a previous reviewer message said RETRY, fix the issues it "
-    "listed before re-running."
+    "block. Messages prefixed with [reviewer] are feedback on your last attempt, "
+    "not a new task: if one said RETRY, fix the issues it listed before re-running."
 )
 
 REVIEWER_PROMPT = (
@@ -240,6 +241,13 @@ def coder(state: AgentState, run_python) -> dict:
         # 模型没有返回围栏代码块；直接提示，而不是把散文写进 .py 文件、浪费一次重试机会。
         return {"messages": [{"role": "assistant",
                               "content": "[code output]\n(no code block in model reply)"}]}
+    try:
+        ast.parse(code)
+    except SyntaxError as exc:
+        # 围栏块不是合法 Python（例如模型在真正脚本前加了一个 diff/示例围栏）；
+        # 直接提示让 reviewer 重试，而不是写一个注定失败的 .py。
+        return {"messages": [{"role": "assistant",
+                              "content": f"[code output]\n(extracted block is not valid Python: {exc})"}]}
     output = run_python(code)
     # 同时截断代码与输出，以免超大结果（如打印整个 DataFrame）或过长的生成脚本
     # 在多次重试中撑爆模型上下文窗口；各自保留尾部——打印的数字（以及
@@ -371,14 +379,14 @@ sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
 config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "first task"}]), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and report the month -> revenue numbers."}]), config=config)
 
     sandbox.pause()                                   # 快照 VM + 根文件系统
     # Sandbox.connect() 返回的是新实例；run_python 闭包捕获的是暂停前的旧实例，
     # 因此需要重新绑定工具并在新实例上重建图，同时保留同一个 checkpointer 以恢复同一 checkpoint 线程。
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # 恢复后 /workspace 保持不变
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "follow-up task"}]), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "now compute average units per product"}]), config=config)
 finally:
     sandbox.kill()
 ```
