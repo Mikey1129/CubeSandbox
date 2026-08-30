@@ -40,7 +40,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 
 | 组件 | 版本 | 说明 |
 |---|---|---|
-| langgraph | `>=0.2.50,<1` | `StateGraph`、`START`/`END`、`add_messages` |
+| langgraph | `>=0.2.50,<2` | `StateGraph`、`START`/`END`、`add_messages` |
 | langchain-openai | `>=1.0,<2.0` | `ChatOpenAI`（任意 OpenAI 兼容端点） |
 | cubesandbox SDK | `>=0.6.0` | `Sandbox.create` / `files.write` / `commands.run` |
 | CubeSandbox 平台 | `>=0.3.0` | 核心；可选特性见 LangChain 指南 |
@@ -354,7 +354,7 @@ if __name__ == "__main__":
 将上面的代码保存为 `langgraph_agent_demo.py`，然后运行：
 
 ```bash
-pip install "langgraph>=0.2.50,<1" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
+pip install "langgraph>=0.2.50,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 

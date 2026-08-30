@@ -7,8 +7,9 @@ FROM ${CUBE_BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Pin data-science versions for reproducible builds. Bump as needed.
-# The base image ships pip 22.0.2, which predates the --break-system-packages
-# flag (added in pip 23.0), so upgrade pip first, then install with the flag.
+# Ubuntu 22.04's apt python3-pip is 22.0.2, which predates the
+# --break-system-packages flag (added in pip 23.0), so upgrade pip first, then
+# install with the flag.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3 python3-pip ca-certificates git \
