@@ -215,10 +215,13 @@ def strip_code_fence(text: str) -> str | None:
         return None
     inner = []
     for line in lines[start + 1:]:
-        # Only a bare fence (backticks plus optional whitespace) closes the block;
-        # a language-tagged line like ```markdown inside the script stays code.
-        # (Known limit: a bare ``` line inside a docstring would still close early.)
-        if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
+        # A closer starts with a fence run of three-or-more backticks and is
+        # otherwise empty (a bare ``` line) or followed only by prose on the same
+        # line — models sometimes slip as `` ``` Done! ``. A language-tagged line
+        # like ```markdown inside the script stays code. (Known limit: a bare ```
+        # line inside a docstring would still close early.)
+        s = line.strip()
+        if s.startswith(fence) and set(s.split(None, 1)[0]) == {"`"}:
             break
         inner.append(line)
     return "\n".join(inner).strip()

@@ -204,10 +204,12 @@ def strip_code_fence(text: str) -> str | None:
         return None
     inner = []
     for line in lines[start + 1:]:
-        # 只有裸围栏（反引号加可选空白）才视为关闭；脚本内部像 ```markdown 这样的
-        # 语言标签行要当作代码保留。
-        # （已知限制：docstring 里的裸 ``` 行仍会被提前当作关闭。）
-        if line.strip().rstrip("`").strip() == "" and line.count("`") >= 3:
+        # 关闭条件：以三个及以上反引号开头，且该行其余部分为空（裸 ``` 行），
+        # 或同行的只是文字（模型偶尔会滑成 `` ``` Done! ``）。脚本内部像
+        # ```markdown 这样的语言标签行要当作代码保留。（已知限制：docstring 里的
+        # 裸 ``` 行仍会被提前当作关闭。）
+        s = line.strip()
+        if s.startswith(fence) and set(s.split(None, 1)[0]) == {"`"}:
             break
         inner.append(line)
     return "\n".join(inner).strip()
