@@ -189,7 +189,7 @@ def extract_text(content) -> str:
             if isinstance(block, str):
                 parts.append(block)
             elif isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
+                parts.append(block.get("text") or "")
         return "\n".join(parts)
     return str(content)
 
@@ -198,17 +198,21 @@ def strip_code_fence(text: str) -> str | None:
     """返回第一个 Markdown 围栏内的代码；若没有围栏则返回 None。
     模型常在围栏块前加上说明文字，因此不能假设回复以围栏开头。"""
     fence = "`" * 3                      # 三个反引号，避免字面量围栏
-    text = text.strip()
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith(fence):
-            start = i
-            break
-    if start is None:
+    if not text:
         return None
+    # 围栏开启符可能与说明文字同行（如 `` 代码如下：```python ``），因此要在
+    # 全文任意位置查找第一个围栏 token，而不是只在行首匹配。
+    start = text.find(fence)
+    if start == -1:
+        return None
+    # 代码从开启符所在行的下一行开始；```python 这样的语言标签以及该行其余
+    # 文字都会被丢弃。
+    after = text[start + len(fence):]
+    first_nl = after.find("\n")
+    if first_nl == -1:
+        return None                      # 只有开启符没有正文——视为无代码
     inner = []
-    for line in lines[start + 1:]:
+    for line in after[first_nl + 1:].splitlines():
         # 关闭条件：以三个及以上反引号开头，且该行其余部分为空（裸 ``` 行），
         # 或同行的只是文字（模型偶尔会滑成 `` ``` Done! ``）。脚本内部像
         # ```markdown 这样的语言标签行要当作代码保留。（已知限制：docstring 里的
@@ -217,7 +221,7 @@ def strip_code_fence(text: str) -> str | None:
         if s.startswith(fence) and set(s.split(None, 1)[0]) == {"`"}:
             break
         inner.append(line)
-    return "\n".join(inner).strip()
+    return "\n".join(inner).strip() or None  # 空围栏（```\n```）视为无代码
 
 
 def coder(state: AgentState, run_python) -> dict:

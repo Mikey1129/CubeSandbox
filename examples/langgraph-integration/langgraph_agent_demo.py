@@ -97,7 +97,7 @@ def extract_text(content) -> str:
             if isinstance(block, str):
                 parts.append(block)
             elif isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
+                parts.append(block.get("text") or "")
         return "\n".join(parts)
     return str(content)
 
@@ -106,17 +106,21 @@ def strip_code_fence(text: str) -> str | None:
     """Return the code inside the first markdown fence, or None when the reply
     has no fenced block — models often prefix the fenced block with prose."""
     fence = "`" * 3                      # three backticks, without a literal fence
-    text = text.strip()
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.strip().startswith(fence):
-            start = i
-            break
-    if start is None:
+    if not text:
         return None
+    # The opener may share a line with prose (`` The code is: ```python ``), so
+    # search for the first fence token anywhere rather than only at a line start.
+    start = text.find(fence)
+    if start == -1:
+        return None
+    # Code begins on the line after the opener; a language tag like ```python and
+    # any trailing prose on that line are dropped.
+    after = text[start + len(fence):]
+    first_nl = after.find("\n")
+    if first_nl == -1:
+        return None                      # opener with no body — treat as no code
     inner = []
-    for line in lines[start + 1:]:
+    for line in after[first_nl + 1:].splitlines():
         # A closer starts with a fence run of three-or-more backticks and is
         # otherwise empty (a bare ``` line) or followed only by prose on the same
         # line — models sometimes slip as `` ``` Done! ``. A language-tagged line
@@ -126,7 +130,7 @@ def strip_code_fence(text: str) -> str | None:
         if s.startswith(fence) and set(s.split(None, 1)[0]) == {"`"}:
             break
         inner.append(line)
-    return "\n".join(inner).strip()
+    return "\n".join(inner).strip() or None  # empty fence (```\n```) counts as no code
 
 
 def coder(state: AgentState, run_python) -> dict:
