@@ -104,6 +104,7 @@ import sys
 from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -242,20 +243,17 @@ def coder(state: AgentState, run_python) -> dict:
     except Exception as exc:
         # 瞬时 LLM 错误（限流、5xx、超时）不应中止整个图运行；当作空代码提示，
         # 让 reviewer 重试。
-        return {"messages": [{"role": "assistant",
-                              "content": f"[code output]\n(llm error: {exc})"}]}
+        return {"messages": [AIMessage(content=f"[code output]\n(llm error: {exc})")]}
     code = strip_code_fence(extract_text(reply))
     if code is None:
         # 模型没有返回围栏代码块；直接提示，而不是把散文写进 .py 文件、浪费一次重试机会。
-        return {"messages": [{"role": "assistant",
-                              "content": "[code output]\n(no code block in model reply)"}]}
+        return {"messages": [AIMessage(content="[code output]\n(no code block in model reply)")]}
     try:
         ast.parse(code)
     except SyntaxError as exc:
         # 围栏块不是合法 Python（例如模型在真正脚本前加了一个 diff/示例围栏）；
         # 直接提示让 reviewer 重试，而不是写一个注定失败的 .py。
-        return {"messages": [{"role": "assistant",
-                              "content": f"[code output]\n(extracted block is not valid Python: {exc})"}]}
+        return {"messages": [AIMessage(content=f"[code output]\n(extracted block is not valid Python: {exc})")]}
     output = run_python(code)
     # 同时截断代码与输出，以免超大结果（如打印整个 DataFrame）或过长的生成脚本
     # 在多次重试中撑爆模型上下文窗口；各自保留尾部——打印的数字（以及
@@ -266,8 +264,7 @@ def coder(state: AgentState, run_python) -> dict:
         output = "[earlier output truncated]\n" + output[-4000:]
     # 把代码连同输出一起写入消息，这样 RETRY 时 coder 能看到上次写了什么，
     # 而不是重复犯同样的错误。
-    return {"messages": [{"role": "assistant",
-                          "content": f"[code]\n{code}\n[code output]\n{output}"}]}
+    return {"messages": [AIMessage(content=f"[code]\n{code}\n[code output]\n{output}")]}
 
 
 def reviewer(state: AgentState) -> dict:
@@ -279,7 +276,7 @@ def reviewer(state: AgentState) -> dict:
     except Exception as exc:
         # reviewer 里的瞬时 LLM 错误降级为一次重试，而不是中止整个运行。
         return {
-            "messages": [{"role": "user", "content": f"[reviewer] RETRY (llm error: {exc})"}],
+            "messages": [HumanMessage(content=f"[reviewer] RETRY (llm error: {exc})")],
             "attempts": state.get("attempts", 0) + 1,
             "done": False,
         }
@@ -291,7 +288,7 @@ def reviewer(state: AgentState) -> dict:
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {
-        "messages": [{"role": "user", "content": f"[reviewer] {verdict}"}],
+        "messages": [HumanMessage(content=f"[reviewer] {verdict}")],
         "attempts": state.get("attempts", 0) + 1,
         "done": done,
     }

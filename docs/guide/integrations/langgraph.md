@@ -112,6 +112,7 @@ import sys
 from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -257,22 +258,19 @@ def coder(state: AgentState, run_python) -> dict:
     except Exception as exc:
         # A transient LLM error (rate limit, 5xx, timeout) must not abort the
         # whole graph run; surface it as empty code so the reviewer retries.
-        return {"messages": [{"role": "assistant",
-                              "content": f"[code output]\n(llm error: {exc})"}]}
+        return {"messages": [AIMessage(content=f"[code output]\n(llm error: {exc})")]}
     code = strip_code_fence(extract_text(reply))
     if code is None:
         # The model returned no fenced code block; surface that instead of writing
         # prose to a .py file and wasting an attempt on a SyntaxError.
-        return {"messages": [{"role": "assistant",
-                              "content": "[code output]\n(no code block in model reply)"}]}
+        return {"messages": [AIMessage(content="[code output]\n(no code block in model reply)")]}
     try:
         ast.parse(code)
     except SyntaxError as exc:
         # The fenced block isn't valid Python (e.g. the model prefaced the real
         # script with a diff/example fence); surface it so the reviewer retries
         # instead of writing a .py that always fails.
-        return {"messages": [{"role": "assistant",
-                              "content": f"[code output]\n(extracted block is not valid Python: {exc})"}]}
+        return {"messages": [AIMessage(content=f"[code output]\n(extracted block is not valid Python: {exc})")]}
     output = run_python(code)
     # Cap both the code and the output so a huge result (e.g. a printed DataFrame)
     # or a large generated script cannot blow the model's context window across
@@ -284,8 +282,7 @@ def coder(state: AgentState, run_python) -> dict:
         output = "[earlier output truncated]\n" + output[-4000:]
     # Include the code alongside the output so that on a RETRY the coder can see
     # what it wrote last time instead of repeating the same mistake.
-    return {"messages": [{"role": "assistant",
-                          "content": f"[code]\n{code}\n[code output]\n{output}"}]}
+    return {"messages": [AIMessage(content=f"[code]\n{code}\n[code output]\n{output}")]}
 
 
 def reviewer(state: AgentState) -> dict:
@@ -298,7 +295,7 @@ def reviewer(state: AgentState) -> dict:
         # A transient LLM error in the reviewer degrades to a retry rather than
         # aborting the run.
         return {
-            "messages": [{"role": "user", "content": f"[reviewer] RETRY (llm error: {exc})"}],
+            "messages": [HumanMessage(content=f"[reviewer] RETRY (llm error: {exc})")],
             "attempts": state.get("attempts", 0) + 1,
             "done": False,
         }
@@ -311,7 +308,7 @@ def reviewer(state: AgentState) -> dict:
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
-        "messages": [{"role": "user", "content": f"[reviewer] {verdict}"}],
+        "messages": [HumanMessage(content=f"[reviewer] {verdict}")],
         "attempts": state.get("attempts", 0) + 1,
         "done": done,
     }
