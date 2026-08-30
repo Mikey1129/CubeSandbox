@@ -42,7 +42,7 @@ python langgraph_checkpoint_demo.py
 |---|---|---|
 | `CUBE_API_URL` | — | CubeAPI base URL (defaults to `http://127.0.0.1:3000`) |
 | `CUBE_TEMPLATE_ID` | ✓ | Sandbox template id used by the demo |
-| `CUBE_PROXY_NODE_IP` | ✓ | Direct IP to reach CubeProxy |
+| `CUBE_PROXY_NODE_IP` | — | Direct IP to reach CubeProxy (SDK falls back to wildcard-DNS when unset) |
 | `CUBE_API_KEY` | — | Only for an auth-enabled CubeAPI backend |
 | `OPENAI_API_KEY` | ✓ | LLM API key (or `TOKENHUB_API_KEY`) |
 | `OPENAI_BASE_URL` | — | OpenAI-compatible endpoint |

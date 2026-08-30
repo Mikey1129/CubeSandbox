@@ -41,7 +41,7 @@ python langgraph_checkpoint_demo.py
 |---|---|---|
 | `CUBE_API_URL` | — | CubeAPI 基础地址（默认 `http://127.0.0.1:3000`） |
 | `CUBE_TEMPLATE_ID` | ✓ | 演示使用的沙箱模板 id |
-| `CUBE_PROXY_NODE_IP` | ✓ | 直连 CubeProxy 的 IP |
+| `CUBE_PROXY_NODE_IP` | — | 直连 CubeProxy 的 IP（未设置时 SDK 回退到 wildcard-DNS 主机） |
 | `CUBE_API_KEY` | — | 仅当 CubeAPI 后端启用鉴权时需要 |
 | `OPENAI_API_KEY` | ✓ | LLM API key（或 `TOKENHUB_API_KEY`） |
 | `OPENAI_BASE_URL` | — | OpenAI 兼容端点 |

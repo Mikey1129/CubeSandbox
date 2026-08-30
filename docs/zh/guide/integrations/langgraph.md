@@ -109,7 +109,7 @@ from cubesandbox import Sandbox
 
 load_dotenv()
 
-for v in ("CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
+for v in ("CUBE_TEMPLATE_ID",):
     if not os.environ.get(v):
         raise SystemExit(f"Missing env: {v}")
 
@@ -247,10 +247,18 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # prompt 要求回复以一个判定词（DONE/RETRY）开头，所以只按第一个 token 判定，
-    # 并剥离 markdown 装饰；不要扫描整句，否则 RETRY 的解释文字里出现 "done" 会误判。
-    first = (verdict.split() or [""])[0].strip(":*#`")
-    done = first.rstrip(".,!?;") == "DONE"
+    # prompt 要求回复以一个判定词（DONE/RETRY）开头，所以先按第一个 token 判定，并剥离
+    # markdown 装饰；若该 token 不是判定词，则回退为扫描整句里的裸 DONE/RETRY 关键词，
+    # 这样偏离格式（前导散文、加粗标记）的回复仍能分类，而不是静默烧掉重试次数。
+    tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
+    first = tokens[0] if tokens else ""
+    if first == "DONE":
+        done = True
+    elif first == "RETRY":
+        done = False
+    else:
+        # 优先显式的 RETRY，而不是 DONE 的提及，避免 "RETRY: 数字已算完但缺图表" 被误判为完成。
+        done = "DONE" in tokens and "RETRY" not in tokens
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {

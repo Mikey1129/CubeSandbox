@@ -13,7 +13,7 @@ from cubesandbox import Sandbox
 
 load_dotenv()
 
-for v in ("CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
+for v in ("CUBE_TEMPLATE_ID",):
     if not os.environ.get(v):
         raise SystemExit(f"Missing env: {v}")
 
@@ -160,10 +160,20 @@ def reviewer(state: AgentState) -> dict:
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
     # The prompt asks for exactly one leading word (DONE/RETRY), so classify on
-    # the first token only — stripping markdown decoration — rather than scanning
-    # the whole reply, where a RETRY explanation containing "done" would misfire.
-    first = (verdict.split() or [""])[0].strip(":*#`")
-    done = first.rstrip(".,!?;") == "DONE"
+    # the first token first — stripping markdown decoration. If that token is
+    # neither, fall back to scanning the reply for a bare DONE/RETRY keyword, so
+    # a reviewer that drifts from the format (leading prose, bold markers) still
+    # classifies instead of silently burning retries.
+    tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
+    first = tokens[0] if tokens else ""
+    if first == "DONE":
+        done = True
+    elif first == "RETRY":
+        done = False
+    else:
+        # Prefer an explicit RETRY over a DONE mention, so "RETRY: the numbers
+        # are done but the chart is missing" still retries.
+        done = "DONE" in tokens and "RETRY" not in tokens
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
