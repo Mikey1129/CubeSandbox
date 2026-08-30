@@ -231,20 +231,24 @@ def strip_code_fence(text: str) -> str | None:
     first_nl = after.find("\n")
     if first_nl == -1:
         return None                      # opener with no body — treat as no code
+    # The opener's indentation is the leading whitespace on its own line. A closer
+    # sits at that same indent, so a fence nested in a markdown list still closes
+    # correctly, while a ``` line indented deeper (a markdown example inside a
+    # docstring or string literal) stays code.
+    opener_line = text[text.rfind("\n", 0, start) + 1:start]
+    opener_indent = len(opener_line) - len(opener_line.lstrip())
     inner = []
     for line in after[first_nl + 1:].splitlines():
-        # A closer is a column-0 line whose leading backtick run matches the
-        # opener's length and is followed by nothing but prose — models sometimes
-        # slip as `` ``` Done! ``. An indented fence inside a docstring or string
-        # literal, a shorter bare ``` line, or a 4-backtick fence when the opener
-        # was 3, all stay code.
-        if line.startswith("`"):
-            s = line.strip()
-            run = 0
-            while run < len(s) and s[run] == "`":
-                run += 1
-            if run == fence_len and (len(s) == run or s[run].isspace()):
-                break
+        # A closer is a line whose stripped leading backtick run matches the
+        # opener's length at the opener's indent and is followed by nothing but
+        # prose — models sometimes slip as `` ``` Done! ``. A shorter bare ``` line
+        # or a 4-backtick fence when the opener was 3 all stay code.
+        s = line.lstrip()
+        run = 0
+        while run < len(s) and s[run] == "`":
+            run += 1
+        if run == fence_len and (len(s) == run or s[run].isspace()) and len(line) - len(s) == opener_indent:
+            break
         inner.append(line)
     return "\n".join(inner).strip() or None  # empty fence (```\n```) counts as no code
 
@@ -352,17 +356,16 @@ if __name__ == "__main__":
             "done": False,
         })
         # The last message is the reviewer's verdict; print the code output
-        # instead so the user actually sees the computed numbers.
+        # instead so the user actually sees the computed numbers. rfind anchors on
+        # the real marker (not a literal "[code output]" inside the generated
+        # script), and we print the last coder message verbatim — even a failed
+        # attempt's placeholder — so the numbers shown match the run's final state
+        # rather than an earlier attempt the reviewer already rejected.
         for msg in reversed(result["messages"]):
             content = str(msg.content)
             marker = "[code output]"
-            idx = content.find(marker)
+            idx = content.rfind(marker)
             if idx == -1:
-                continue
-            tail = content[idx + len(marker):].lstrip("\n")
-            # Skip placeholder outputs (a failed LLM call or an empty/invalid
-            # extraction) so a "llm error: ..." doesn't read like a real result.
-            if tail.startswith(("(llm error", "(no code block", "(extracted block")):
                 continue
             print(content[idx:])
             break
@@ -425,7 +428,9 @@ sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
 config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and report the month -> revenue numbers."}]), config=config)
+    # Stage 1 writes an intermediate artifact so stage 2 reads state that only
+    # survives because /workspace persists across pause() / connect().
+    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and write the month -> revenue table to /workspace/monthly_revenue.csv."}]), config=config)
     if not stage1["done"]:
         print("(stage 1 not verified: reviewer never returned DONE)")
 
@@ -435,7 +440,7 @@ try:
     # instance, keeping the same checkpointer so the same checkpoint thread resumes.
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "now compute average units per product"}]), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "Read /workspace/monthly_revenue.csv (written by stage 1) and report which month had the highest revenue."}]), config=config)
 finally:
     sandbox.kill()
 ```

@@ -218,18 +218,22 @@ def strip_code_fence(text: str) -> str | None:
     first_nl = after.find("\n")
     if first_nl == -1:
         return None                      # 只有开启符没有正文——视为无代码
+    # 开启符的缩进是其所在行的前导空白。关闭符与开启符同缩进——这样嵌套在 Markdown
+    # 列表里的围栏也能正确关闭，而缩进更深（例如 docstring 或字符串字面量里的 Markdown
+    # 示例）的 ``` 行仍当作代码保留。
+    opener_line = text[text.rfind("\n", 0, start) + 1:start]
+    opener_indent = len(opener_line) - len(opener_line.lstrip())
     inner = []
     for line in after[first_nl + 1:].splitlines():
-        # 关闭符必须是顶格（column 0）、开头反引号连串长度与开启符一致且其后只有文字——
-        # 模型偶尔会滑成 `` ``` Done! ``。docstring 或字符串字面量里缩进的围栏、较短的
-        # 裸 ``` 行，或开启符为 3 反引号时出现的 4 反引号围栏，都当作代码保留。
-        if line.startswith("`"):
-            s = line.strip()
-            run = 0
-            while run < len(s) and s[run] == "`":
-                run += 1
-            if run == fence_len and (len(s) == run or s[run].isspace()):
-                break
+        # 关闭符是「去掉前导空白后反引号连串长度等于开启符、与开启符同缩进、且其后只有文字」
+        # 的行——模型偶尔会滑成 `` ``` Done! ``。较短的裸 ``` 行，或开启符为 3 反引号时
+        # 出现的 4 反引号围栏，都当作代码保留。
+        s = line.lstrip()
+        run = 0
+        while run < len(s) and s[run] == "`":
+            run += 1
+        if run == fence_len and (len(s) == run or s[run].isspace()) and len(line) - len(s) == opener_indent:
+            break
         inner.append(line)
     return "\n".join(inner).strip() or None  # 空围栏（```\n```）视为无代码
 
@@ -331,17 +335,15 @@ if __name__ == "__main__":
             "attempts": 0,
             "done": False,
         })
-        # 最后一条消息是 reviewer 的判定；改为打印代码输出，让用户真正看到计算结果。
+        # 最后一条消息是 reviewer 的判定；改为打印代码输出，让用户真正看到计算结果。用 rfind
+        # 锚定真正的标记（而非生成脚本里字面的 "[code output]"），并原样打印最后一个 coder 消息
+        # ——即使是失败尝试的占位输出——这样显示的数字对应本次运行的最终状态，而非 reviewer 已
+        # 拒绝的更早尝试。
         for msg in reversed(result["messages"]):
             content = str(msg.content)
             marker = "[code output]"
-            idx = content.find(marker)
+            idx = content.rfind(marker)
             if idx == -1:
-                continue
-            tail = content[idx + len(marker):].lstrip("\n")
-            # Skip placeholder outputs (a failed LLM call or an empty/invalid
-            # extraction) so a "llm error: ..." doesn't read like a real result.
-            if tail.startswith(("(llm error", "(no code block", "(extracted block")):
                 continue
             print(content[idx:])
             break
@@ -399,7 +401,9 @@ sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
 config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and report the month -> revenue numbers."}]), config=config)
+    # 阶段 1 写入中间产物，让阶段 2 读取仅因 /workspace 在 pause() / connect() 之间
+    # 持久化而得以保留的状态。
+    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and write the month -> revenue table to /workspace/monthly_revenue.csv."}]), config=config)
     if not stage1["done"]:
         print("(stage 1 not verified: reviewer never returned DONE)")
 
@@ -408,7 +412,7 @@ try:
     # 因此需要重新绑定工具并在新实例上重建图，同时保留同一个 checkpointer 以恢复同一 checkpoint 线程。
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # 恢复后 /workspace 保持不变
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "now compute average units per product"}]), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "Read /workspace/monthly_revenue.csv (written by stage 1) and report which month had the highest revenue."}]), config=config)
 finally:
     sandbox.kill()
 ```
