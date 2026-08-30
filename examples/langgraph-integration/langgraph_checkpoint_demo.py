@@ -198,10 +198,9 @@ def reviewer(state: AgentState) -> dict:
             "done": False,
         }
     verdict = extract_text(reply).strip().upper()
-    # The prompt asks for a single leading verdict word, so parse only the first
-    # token — a "DONE"/"RETRY" later in the explanation is prose, not a second
-    # verdict. This avoids both a stray "DONE" in a RETRY explanation stopping
-    # the loop and an "I would not RETRY" re-running a correct answer.
+    # The prompt asks for a single leading verdict word, so only the leading
+    # token counts as the verdict — a "DONE"/"RETRY" later in the explanation
+    # is prose and doesn't flip the result.
     first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;") if verdict else ""
     done = first == "DONE"
     # Emit the verdict as a user-role message so the coder treats RETRY as a
@@ -267,9 +266,15 @@ if __name__ == "__main__":
             content = str(msg.content)
             marker = "[code output]"
             idx = content.find(marker)
-            if idx != -1:
-                print(content[idx:])
-                break
+            if idx == -1:
+                continue
+            tail = content[idx + len(marker):].lstrip("\n")
+            # Skip placeholder outputs (a failed LLM call or an empty/invalid
+            # extraction) so a "llm error: ..." doesn't read like a real result.
+            if tail.startswith(("(llm error", "(no code block", "(extracted block")):
+                continue
+            print(content[idx:])
+            break
         else:
             print("(no code output)")
         if not result["done"]:

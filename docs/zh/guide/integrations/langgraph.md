@@ -284,9 +284,8 @@ def reviewer(state: AgentState) -> dict:
             "done": False,
         }
     verdict = extract_text(reply).strip().upper()
-    # prompt 要求回复以一个判定词开头，因此只解析第一个 token——解释文字里出现的
-    # "DONE"/"RETRY" 是补充说明，不是第二个判定。这样既能避免 RETRY 解释里的 "DONE"
-    # 提前停掉循环，也能避免 "I would not RETRY" 让正确答案被重跑。
+    # prompt 要求回复以一个判定词开头，因此只有前导 token 才作数——解释文字里出现的
+    # "DONE"/"RETRY" 是补充说明，不会翻转判定结果。
     first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;") if verdict else ""
     done = first == "DONE"
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
@@ -340,9 +339,15 @@ if __name__ == "__main__":
             content = str(msg.content)
             marker = "[code output]"
             idx = content.find(marker)
-            if idx != -1:
-                print(content[idx:])
-                break
+            if idx == -1:
+                continue
+            tail = content[idx + len(marker):].lstrip("\n")
+            # Skip placeholder outputs (a failed LLM call or an empty/invalid
+            # extraction) so a "llm error: ..." doesn't read like a real result.
+            if tail.startswith(("(llm error", "(no code block", "(extracted block")):
+                continue
+            print(content[idx:])
+            break
         else:
             print("(no code output)")
         if not result["done"]:
