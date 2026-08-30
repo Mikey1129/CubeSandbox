@@ -5,7 +5,7 @@
 在 [CubeSandbox](https://github.com/TencentCloud/CubeSandbox) MicroVM 中，通过官方 **`cubesandbox`**
 Python SDK 运行一个 [LangGraph](https://github.com/langchain-ai/langgraph) Agent —— 由节点和条件边
 构成的显式 `StateGraph`，其代码执行工具在沙箱内运行。这些是可运行的
-[LangGraph 集成指南](../../docs/guide/integrations/langgraph.md) 对应脚本。
+[LangGraph 集成指南](../../docs/zh/guide/integrations/langgraph.md) 对应脚本。
 
 | 脚本 | 用途 |
 |---|---|
