@@ -113,21 +113,28 @@ def strip_code_fence(text: str) -> str | None:
     start = text.find(fence)
     if start == -1:
         return None
+    # Read the full backtick-run length (```, ````, ...) so a 4-backtick fence is
+    # not mistaken for a 3-backtick opener, and require the closer to match it.
+    fence_len = len(fence)
+    while start + fence_len < len(text) and text[start + fence_len] == "`":
+        fence_len += 1
     # Code begins on the line after the opener; a language tag like ```python and
     # any trailing prose on that line are dropped.
-    after = text[start + len(fence):]
+    after = text[start + fence_len:]
     first_nl = after.find("\n")
     if first_nl == -1:
         return None                      # opener with no body — treat as no code
     inner = []
     for line in after[first_nl + 1:].splitlines():
-        # A closer starts with a fence run of three-or-more backticks and is
-        # otherwise empty (a bare ``` line) or followed only by prose on the same
-        # line — models sometimes slip as `` ``` Done! ``. A language-tagged line
-        # like ```markdown inside the script stays code. (Known limit: a bare ```
-        # line inside a docstring would still close early.)
+        # A closer is a line whose leading backtick run matches the opener's
+        # length and is followed by nothing but prose — models sometimes slip as
+        # `` ``` Done! ``. A shorter bare ``` line inside a docstring, or a
+        # 4-backtick fence when the opener was 3, stays code.
         s = line.strip()
-        if s.startswith(fence) and set(s.split(None, 1)[0]) == {"`"}:
+        run = 0
+        while run < len(s) and s[run] == "`":
+            run += 1
+        if run == fence_len and (len(s) == run or s[run].isspace()):
             break
         inner.append(line)
     return "\n".join(inner).strip() or None  # empty fence (```\n```) counts as no code
