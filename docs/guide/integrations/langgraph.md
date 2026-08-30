@@ -307,7 +307,7 @@ def reviewer(state: AgentState) -> dict:
     # token — a "DONE"/"RETRY" later in the explanation is prose, not a second
     # verdict. This avoids both a stray "DONE" in a RETRY explanation stopping
     # the loop and an "I would not RETRY" re-running a correct answer.
-    first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;")
+    first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;") if verdict else ""
     done = first == "DONE"
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.

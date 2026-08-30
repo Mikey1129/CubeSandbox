@@ -287,7 +287,7 @@ def reviewer(state: AgentState) -> dict:
     # prompt 要求回复以一个判定词开头，因此只解析第一个 token——解释文字里出现的
     # "DONE"/"RETRY" 是补充说明，不是第二个判定。这样既能避免 RETRY 解释里的 "DONE"
     # 提前停掉循环，也能避免 "I would not RETRY" 让正确答案被重跑。
-    first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;")
+    first = verdict.split(maxsplit=1)[0].strip(":*#`").rstrip(".,!?;") if verdict else ""
     done = first == "DONE"
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
