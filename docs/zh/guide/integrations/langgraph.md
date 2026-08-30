@@ -175,9 +175,13 @@ REVIEWER_PROMPT = (
 
 
 def extract_text(content) -> str:
-    """从消息内容中提取纯文本；content 可能是 str，也可能是 content blocks 列表。"""
+    """从消息内容中提取纯文本；content 可能是 str、单个 content block dict，或 block 列表。"""
+    if not content:
+        return ""                     # None / 空内容——视为无文本，避免返回字面量 "None"
     if isinstance(content, str):
         return content
+    if isinstance(content, dict):
+        content = [content]           # 单个 content block，而非列表
     if isinstance(content, list):
         parts = []
         for block in content:

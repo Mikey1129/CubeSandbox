@@ -82,10 +82,15 @@ REVIEWER_PROMPT = (
 
 
 def extract_text(content) -> str:
-    """Return plain text from a message content, which may be a str or a list
-    of content blocks (some OpenAI-compatible endpoints return the latter)."""
+    """Return plain text from a message content, which may be a str, a single
+    content block dict, or a list of blocks (some OpenAI-compatible endpoints
+    return the latter two)."""
+    if not content:
+        return ""                     # None / empty content — treat as no text
     if isinstance(content, str):
         return content
+    if isinstance(content, dict):
+        content = [content]           # a lone content block, not a list
     if isinstance(content, list):
         parts = []
         for block in content:
