@@ -397,7 +397,9 @@ sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
 config = {"configurable": {"thread_id": sandbox.sandbox_id}}
 try:
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and report the month -> revenue numbers."}]), config=config)
+    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and report the month -> revenue numbers."}]), config=config)
+    if not stage1["done"]:
+        print("(stage 1 not verified: reviewer never returned DONE)")
 
     sandbox.pause()                                   # 快照 VM + 根文件系统
     # Sandbox.connect() 返回的是新实例；run_python 闭包捕获的是暂停前的旧实例，
