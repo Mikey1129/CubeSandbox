@@ -13,7 +13,7 @@ from cubesandbox import Sandbox
 
 load_dotenv()
 
-for v in ("CUBE_API_URL", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
+for v in ("CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
     if not os.environ.get(v):
         raise SystemExit(f"Missing env: {v}")
 
@@ -135,9 +135,12 @@ def coder(state: AgentState, run_python) -> dict:
         return {"messages": [{"role": "assistant",
                               "content": "[code output]\n(no code block in model reply)"}]}
     output = run_python(code)
-    # Cap the output so a huge result (e.g. a printed DataFrame) cannot blow the
-    # model's context window. Keep the tail: the printed numbers (and any
-    # stderr/traceback) land at the end, so they must survive the truncation.
+    # Cap both the code and the output so a huge result (e.g. a printed DataFrame)
+    # or a large generated script cannot blow the model's context window across
+    # retries. Keep the tail of each: the printed numbers (and any stderr/traceback)
+    # land at the end, and the script's tail still shows the logic that ran.
+    if len(code) > 4000:
+        code = "[earlier code truncated]\n" + code[-4000:]
     if len(output) > 4000:
         output = "[earlier output truncated]\n" + output[-4000:]
     # Include the code alongside the output so that on a RETRY the coder can see

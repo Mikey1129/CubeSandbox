@@ -39,7 +39,7 @@ python langgraph_checkpoint_demo.py
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `CUBE_API_URL` | ✓ | CubeAPI 基础地址（默认 `http://127.0.0.1:3000`） |
+| `CUBE_API_URL` | — | CubeAPI 基础地址（默认 `http://127.0.0.1:3000`） |
 | `CUBE_TEMPLATE_ID` | ✓ | 演示使用的沙箱模板 id |
 | `CUBE_PROXY_NODE_IP` | ✓ | 直连 CubeProxy 的 IP |
 | `CUBE_API_KEY` | — | 仅当 CubeAPI 后端启用鉴权时需要 |

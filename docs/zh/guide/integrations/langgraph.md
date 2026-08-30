@@ -109,7 +109,7 @@ from cubesandbox import Sandbox
 
 load_dotenv()
 
-for v in ("CUBE_API_URL", "CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
+for v in ("CUBE_TEMPLATE_ID", "CUBE_PROXY_NODE_IP"):
     if not os.environ.get(v):
         raise SystemExit(f"Missing env: {v}")
 
@@ -225,8 +225,11 @@ def coder(state: AgentState, run_python) -> dict:
         return {"messages": [{"role": "assistant",
                               "content": "[code output]\n(no code block in model reply)"}]}
     output = run_python(code)
-    # 截断输出以免超大结果（如打印整个 DataFrame）撑爆模型上下文窗口；保留尾部——
-    # 打印的数字（以及 stderr/traceback）在末尾，必须让它们在截断后仍存活。
+    # 同时截断代码与输出，以免超大结果（如打印整个 DataFrame）或过长的生成脚本
+    # 在多次重试中撑爆模型上下文窗口；各自保留尾部——打印的数字（以及
+    # stderr/traceback）在末尾，脚本尾部仍能展示实际运行的逻辑。
+    if len(code) > 4000:
+        code = "[earlier code truncated]\n" + code[-4000:]
     if len(output) > 4000:
         output = "[earlier output truncated]\n" + output[-4000:]
     # 把代码连同输出一起写入消息，这样 RETRY 时 coder 能看到上次写了什么，

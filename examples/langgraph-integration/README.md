@@ -40,7 +40,7 @@ python langgraph_checkpoint_demo.py
 
 | Variable | Required | Notes |
 |---|---|---|
-| `CUBE_API_URL` | ✓ | CubeAPI base URL (defaults to `http://127.0.0.1:3000`) |
+| `CUBE_API_URL` | — | CubeAPI base URL (defaults to `http://127.0.0.1:3000`) |
 | `CUBE_TEMPLATE_ID` | ✓ | Sandbox template id used by the demo |
 | `CUBE_PROXY_NODE_IP` | ✓ | Direct IP to reach CubeProxy |
 | `CUBE_API_KEY` | — | Only for an auth-enabled CubeAPI backend |
