@@ -107,7 +107,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
+from langgraph.graph import add_messages
 from cubesandbox import Sandbox
 
 load_dotenv()
@@ -336,9 +336,10 @@ if __name__ == "__main__":
             "done": False,
         })
         # 最后一条消息是 reviewer 的判定；改为打印代码输出，让用户真正看到计算结果。用 rfind
-        # 锚定真正的标记（而非生成脚本里字面的 "[code output]"），并原样打印最后一个 coder 消息
-        # ——即使是失败尝试的占位输出——这样显示的数字对应本次运行的最终状态，而非 reviewer 已
-        # 拒绝的更早尝试。
+        # 取最后一个 "[code output]" 出现位置，这样生成脚本里（真实标记之前）的字面不会偏移
+        # 截取；唯一残余是 stdout 自身恰好打印该 token，仅会导致显示截断。原样打印最后一个
+        # coder 消息——即使是失败尝试的占位输出——让显示的数字对应本次运行的最终状态，而非
+        # reviewer 已拒绝的更早尝试。
         for msg in reversed(result["messages"]):
             content = str(msg.content)
             marker = "[code output]"

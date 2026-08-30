@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
+from langgraph.graph import add_messages
 from cubesandbox import Sandbox
 
 load_dotenv()
@@ -265,10 +265,12 @@ if __name__ == "__main__":
         graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
         result = graph.invoke(stage_input([{"role": "user", "content": "Read /workspace/monthly_revenue.csv (written by stage 1) and report which month had the highest revenue."}]), config=config)
         # Print the second stage's code output so the resume is observable. rfind
-        # anchors on the real marker (not a literal "[code output]" inside the
-        # generated script), and we print the last coder message verbatim — even a
-        # failed attempt's placeholder — so the numbers shown match the run's final
-        # state rather than an earlier attempt the reviewer already rejected.
+        # takes the last "[code output]" occurrence, so a literal inside the
+        # generated script (before the real marker) can't shift the excerpt — only
+        # stdout that itself prints that token would, which merely truncates the
+        # display. Print the last coder message verbatim, even a failed attempt's
+        # placeholder, so the numbers shown match the run's final state rather than
+        # an earlier attempt the reviewer already rejected.
         for msg in reversed(result["messages"]):
             content = str(msg.content)
             marker = "[code output]"

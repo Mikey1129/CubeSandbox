@@ -115,7 +115,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
+from langgraph.graph import add_messages
 from cubesandbox import Sandbox
 
 load_dotenv()
@@ -356,11 +356,13 @@ if __name__ == "__main__":
             "done": False,
         })
         # The last message is the reviewer's verdict; print the code output
-        # instead so the user actually sees the computed numbers. rfind anchors on
-        # the real marker (not a literal "[code output]" inside the generated
-        # script), and we print the last coder message verbatim — even a failed
-        # attempt's placeholder — so the numbers shown match the run's final state
-        # rather than an earlier attempt the reviewer already rejected.
+        # instead so the user actually sees the computed numbers. rfind takes the
+        # last "[code output]" occurrence, so a literal inside the generated script
+        # (before the real marker) can't shift the excerpt — only stdout that itself
+        # prints that token would, which merely truncates the display. Print the
+        # last coder message verbatim, even a failed attempt's placeholder, so the
+        # numbers shown match the run's final state rather than an earlier attempt
+        # the reviewer already rejected.
         for msg in reversed(result["messages"]):
             content = str(msg.content)
             marker = "[code output]"
