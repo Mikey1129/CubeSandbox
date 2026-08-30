@@ -4,7 +4,7 @@
 ARG CUBE_BASE_IMAGE=ghcr.io/tencentcloud/cubesandbox-base:2026.16
 FROM ${CUBE_BASE_IMAGE}
 
-ARG DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Pin data-science versions for reproducible builds. Bump as needed.
 # The base image ships pip 22.0.2, which predates the --break-system-packages
