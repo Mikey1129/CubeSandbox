@@ -68,11 +68,10 @@ def make_run_python(sandbox: Sandbox):
 
 CODER_PROMPT = (
     "You are a data analyst. Write a single self-contained Python script that answers "
-    "the user's task using the dataset at /workspace/sales.csv "
-    "(columns month,product,units,price). The environment has pandas, numpy, "
-    "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
-    "network access. Wrap the script in a single markdown ```python ... ``` fenced "
-    "block. Messages prefixed with [reviewer] are feedback on your last attempt, "
+    "the user's task using the dataset file(s) named in the task. The environment has "
+    "pandas, numpy, matplotlib, scikit-learn preinstalled. Print the final numbers. "
+    "Do not rely on network access. Wrap the script in a single markdown ```python ... ``` "
+    "fenced block. Messages prefixed with [reviewer] are feedback on your last attempt, "
     "not a new task: if one said RETRY, fix the issues it listed before re-running."
 )
 

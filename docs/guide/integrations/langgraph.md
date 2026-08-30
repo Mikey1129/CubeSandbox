@@ -173,11 +173,10 @@ def make_run_python(sandbox: Sandbox):
 
 CODER_PROMPT = (
     "You are a data analyst. Write a single self-contained Python script that answers "
-    "the user's task using the dataset at /workspace/sales.csv "
-    "(columns month,product,units,price). The environment has pandas, numpy, "
-    "matplotlib, scikit-learn preinstalled. Print the final numbers. Do not rely on "
-    "network access. Wrap the script in a single markdown ```python ... ``` fenced "
-    "block. Messages prefixed with [reviewer] are feedback on your last attempt, "
+    "the user's task using the dataset file(s) named in the task. The environment has "
+    "pandas, numpy, matplotlib, scikit-learn preinstalled. Print the final numbers. "
+    "Do not rely on network access. Wrap the script in a single markdown ```python ... ``` "
+    "fenced block. Messages prefixed with [reviewer] are feedback on your last attempt, "
     "not a new task: if one said RETRY, fix the issues it listed before re-running."
 )
 
@@ -424,15 +423,16 @@ def stage_input(messages):
     return {"messages": messages, "attempts": 0, "done": False}
 
 
-sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
-# Key the checkpoint thread by the sandbox id so the same thread_id reattaches
-# to the same MicroVM across pause() / connect().
-config = {"configurable": {"thread_id": sandbox.sandbox_id}}
+sandbox = None
 try:
+    sandbox = Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"], timeout=1800)
+    # Key the checkpoint thread by the sandbox id so the same thread_id reattaches
+    # to the same MicroVM across pause() / connect().
+    config = {"configurable": {"thread_id": sandbox.sandbox_id}}
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
     # Stage 1 writes an intermediate artifact so stage 2 reads state that only
     # survives because /workspace persists across pause() / connect().
-    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace, compute total revenue per month, and write the month -> revenue table to /workspace/monthly_revenue.csv."}]), config=config)
+    stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace (columns month,product,units,price), compute total revenue per month, write the month -> revenue table to /workspace/monthly_revenue.csv, and write the exact string 'stage1-complete' to /workspace/stage1_marker.txt."}]), config=config)
     if not stage1["done"]:
         print("(stage 1 not verified: reviewer never returned DONE)")
 
@@ -442,9 +442,13 @@ try:
     # instance, keeping the same checkpointer so the same checkpoint thread resumes.
     sandbox = Sandbox.connect(sandbox.sandbox_id)     # /workspace intact after resume
     graph = build_graph(make_run_python(sandbox), checkpointer=checkpointer)
-    graph.invoke(stage_input([{"role": "user", "content": "Read /workspace/monthly_revenue.csv (written by stage 1) and report which month had the highest revenue."}]), config=config)
+    graph.invoke(stage_input([{"role": "user", "content": "Read /workspace/monthly_revenue.csv and /workspace/stage1_marker.txt (both written by stage 1) and report the marker's exact text and which month had the highest revenue. Use only those two files — do not recompute from sales.csv."}]), config=config)
 finally:
-    sandbox.kill()
+    if sandbox is not None:
+        try:
+            sandbox.kill()
+        except Exception:
+            pass
 ```
 
 Keep the LangGraph `thread_id` aligned with the Cube `sandbox_id` (e.g. store both in your
