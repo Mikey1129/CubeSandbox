@@ -159,21 +159,12 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # The prompt asks for exactly one leading word (DONE/RETRY), so classify on
-    # the first token first — stripping markdown decoration. If that token is
-    # neither, fall back to scanning the reply for a bare DONE/RETRY keyword, so
-    # a reviewer that drifts from the format (leading prose, bold markers) still
-    # classifies instead of silently burning retries.
+    # Treat the full token list as authoritative: an explicit RETRY anywhere in
+    # the reply wins over DONE — the prompt asks for a single leading verdict
+    # word, so a stray "DONE" inside a RETRY explanation must not stop the loop.
+    # DONE only wins when no RETRY token is present.
     tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
-    first = tokens[0] if tokens else ""
-    if first == "DONE":
-        done = True
-    elif first == "RETRY":
-        done = False
-    else:
-        # Prefer an explicit RETRY over a DONE mention, so "RETRY: the numbers
-        # are done but the chart is missing" still retries.
-        done = "DONE" in tokens and "RETRY" not in tokens
+    done = "DONE" in tokens and "RETRY" not in tokens
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {

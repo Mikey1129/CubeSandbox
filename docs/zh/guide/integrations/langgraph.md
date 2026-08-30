@@ -40,7 +40,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 
 | 组件 | 版本 | 说明 |
 |---|---|---|
-| langgraph | `>=0.2` | `StateGraph`、`START`/`END`、`add_messages` |
+| langgraph | `>=0.2.50,<1` | `StateGraph`、`START`/`END`、`add_messages` |
 | langchain-openai | `>=1.0,<2.0` | `ChatOpenAI`（任意 OpenAI 兼容端点） |
 | cubesandbox SDK | `>=0.6.0` | `Sandbox.create` / `files.write` / `commands.run` |
 | CubeSandbox 平台 | `>=0.3.0` | 核心；可选特性见 LangChain 指南 |
@@ -53,7 +53,8 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 - 已部署 CubeSandbox，CubeAPI 可从 `http://<node>:3000` 访问。
 - 已构建并注册一个含 Python 栈（pandas / numpy / matplotlib / scikit-learn）的模板镜像。可参考
   LangChain 指南的[模板镜像](../integrations/langchain.md)步骤，或直接复用同一个 template id。
-- `cubesandbox` SDK 所需环境变量：`CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP`；
+- `cubesandbox` SDK 环境变量：`CUBE_TEMPLATE_ID`（必填），以及 `CUBE_API_URL`、`CUBE_PROXY_NODE_IP`
+  （仅远程 / 直连 IP 部署时需要——未设置时 SDK 回退到 `http://127.0.0.1:3000` / wildcard-DNS 主机）；
   CubeAPI 后端启用鉴权时还需 `CUBE_API_KEY`（未设置时 SDK 不发送鉴权头）。
 - Python 3.10+（示例使用 `str | None`、`Annotated` 及 `langchain-openai` 1.x）。
 - 经 `OPENAI_BASE_URL` / `OPENAI_API_KEY`（或 `TOKENHUB_API_KEY`）接入的 OpenAI 兼容 LLM 端点。
@@ -80,8 +81,8 @@ cubemastercli tpl create-from-image \
   --expose-port 49983 --probe 49983 --probe-path /health
 ```
 
-随后设置 `CUBE_API_URL`、`CUBE_TEMPLATE_ID`、`CUBE_PROXY_NODE_IP` 以及 LLM key。LangChain 指南中的
-环境变量表此处完全适用。
+随后设置 `CUBE_TEMPLATE_ID` 以及 LLM key；`CUBE_API_URL`、`CUBE_PROXY_NODE_IP` 仅在不同于 SDK
+默认值时才需设置。LangChain 指南中的环境变量表此处完全适用。
 
 ### 3. 定义图
 
@@ -247,18 +248,10 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # prompt 要求回复以一个判定词（DONE/RETRY）开头，所以先按第一个 token 判定，并剥离
-    # markdown 装饰；若该 token 不是判定词，则回退为扫描整句里的裸 DONE/RETRY 关键词，
-    # 这样偏离格式（前导散文、加粗标记）的回复仍能分类，而不是静默烧掉重试次数。
+    # 以完整 token 列表为权威：回复中任何位置的显式 RETRY 都优先于 DONE——prompt 要求回复以一个
+    # 判定词开头，因此 RETRY 解释文字里的 "DONE" 不应停止循环；只有不存在 RETRY 时才判定为 DONE。
     tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
-    first = tokens[0] if tokens else ""
-    if first == "DONE":
-        done = True
-    elif first == "RETRY":
-        done = False
-    else:
-        # 优先显式的 RETRY，而不是 DONE 的提及，避免 "RETRY: 数字已算完但缺图表" 被误判为完成。
-        done = "DONE" in tokens and "RETRY" not in tokens
+    done = "DONE" in tokens and "RETRY" not in tokens
     # 把判定作为 user 角色消息发出，让 coder 把 RETRY 当作需要修复的指令，
     # 而不是当作它自己先前的 assistant 输出。
     return {
@@ -322,7 +315,7 @@ if __name__ == "__main__":
 将上面的代码保存为 `langgraph_agent_demo.py`，然后运行：
 
 ```bash
-pip install "langgraph>=0.2,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
+pip install "langgraph>=0.2.50,<1" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 
@@ -345,6 +338,9 @@ LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
 | `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox.sandbox_id` |
 | 在同一 thread 上用 `invoke(..., config)` 开始新一轮 | `sandbox.pause()` 后 `Sandbox.connect(sandbox_id)` |
+
+下面的片段是前文的延续——`Sandbox`、`build_graph`、`make_run_python` 均来自前几节。
+独立的可运行脚本见 `examples/langgraph-integration/langgraph_checkpoint_demo.py`。
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver

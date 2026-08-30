@@ -43,7 +43,7 @@ stages and the run resumable later via checkpointing.
 
 | Component | Version | Notes |
 |---|---|---|
-| langgraph | `>=0.2` | `StateGraph`, `START`/`END`, `add_messages` |
+| langgraph | `>=0.2.50,<1` | `StateGraph`, `START`/`END`, `add_messages` |
 | langchain-openai | `>=1.0,<2.0` | `ChatOpenAI` (any OpenAI-compatible endpoint) |
 | cubesandbox SDK | `>=0.6.0` | `Sandbox.create` / `files.write` / `commands.run` |
 | CubeSandbox platform | `>=0.3.0` | core; higher for optional features (see LangChain guide) |
@@ -57,8 +57,10 @@ The prerequisites are identical to the LangChain guide — the same sandbox temp
 - A template image with the Python stack (pandas / numpy / matplotlib / scikit-learn) built and
   registered. Follow the LangChain guide's
   [template image](../integrations/langchain.md) steps, or reuse the same template id.
-- `cubesandbox` SDK env vars: `CUBE_API_URL`, `CUBE_TEMPLATE_ID`, `CUBE_PROXY_NODE_IP`, plus
-  `CUBE_API_KEY` when the CubeAPI backend has auth enabled (the SDK sends no auth header when unset).
+- `cubesandbox` SDK env vars: `CUBE_TEMPLATE_ID` (required), plus `CUBE_API_URL` and
+  `CUBE_PROXY_NODE_IP` (required only for remote / direct-IP deployments — the SDK falls back to
+  `http://127.0.0.1:3000` / the wildcard-DNS host when unset), and `CUBE_API_KEY` when the CubeAPI
+  backend has auth enabled (the SDK sends no auth header when unset).
 - Python 3.10+ (the sample uses `str | None`, `Annotated`, and `langchain-openai` 1.x).
 - An OpenAI-compatible LLM endpoint via `OPENAI_BASE_URL` / `OPENAI_API_KEY` (or `TOKENHUB_API_KEY`).
 
@@ -85,8 +87,8 @@ cubemastercli tpl create-from-image \
   --expose-port 49983 --probe 49983 --probe-path /health
 ```
 
-Then set `CUBE_API_URL`, `CUBE_TEMPLATE_ID`, `CUBE_PROXY_NODE_IP`, and your LLM key. The variable
-table in the LangChain guide applies unchanged.
+Then set `CUBE_TEMPLATE_ID` and your LLM key; set `CUBE_API_URL` and `CUBE_PROXY_NODE_IP` only when
+they differ from the SDK defaults. The variable table in the LangChain guide applies unchanged.
 
 ### 3. Define the graph
 
@@ -262,21 +264,12 @@ def reviewer(state: AgentState) -> dict:
     verdict = extract_text(llm.invoke(
         [{"role": "system", "content": REVIEWER_PROMPT}, *state["messages"]]
     ).content).strip().upper()
-    # The prompt asks for exactly one leading word (DONE/RETRY), so classify on
-    # the first token first — stripping markdown decoration. If that token is
-    # neither, fall back to scanning the reply for a bare DONE/RETRY keyword, so
-    # a reviewer that drifts from the format (leading prose, bold markers) still
-    # classifies instead of silently burning retries.
+    # Treat the full token list as authoritative: an explicit RETRY anywhere in
+    # the reply wins over DONE — the prompt asks for a single leading verdict
+    # word, so a stray "DONE" inside a RETRY explanation must not stop the loop.
+    # DONE only wins when no RETRY token is present.
     tokens = [t.strip(":*#`").rstrip(".,!?;") for t in verdict.split()]
-    first = tokens[0] if tokens else ""
-    if first == "DONE":
-        done = True
-    elif first == "RETRY":
-        done = False
-    else:
-        # Prefer an explicit RETRY over a DONE mention, so "RETRY: the numbers
-        # are done but the chart is missing" still retries.
-        done = "DONE" in tokens and "RETRY" not in tokens
+    done = "DONE" in tokens and "RETRY" not in tokens
     # Emit the verdict as a user-role message so the coder treats RETRY as a
     # directive to fix, not as its own prior assistant output.
     return {
@@ -341,7 +334,7 @@ if __name__ == "__main__":
 Save the code above as `langgraph_agent_demo.py`, then run it:
 
 ```bash
-pip install "langgraph>=0.2,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
+pip install "langgraph>=0.2.50,<1" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 
@@ -366,6 +359,10 @@ long-running, resumable agents:
 | `builder.compile(checkpointer=MemorySaver())` | `Sandbox.create(template=...)` |
 | `config = {"configurable": {"thread_id": sandbox.sandbox_id}}` | `sandbox.sandbox_id` |
 | continue a new run on the same thread via `invoke(..., config)` | `sandbox.pause()` then `Sandbox.connect(sandbox_id)` |
+
+The snippet below continues the graph defined above — `Sandbox`, `build_graph`, and
+`make_run_python` come from the earlier sections. The standalone runnable script is
+`examples/langgraph-integration/langgraph_checkpoint_demo.py`.
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver
