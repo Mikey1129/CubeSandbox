@@ -205,20 +205,27 @@ def strip_code_fence(text: str) -> str | None:
     start = text.find(fence)
     if start == -1:
         return None
+    # 读取完整的反引号连串长度（```、````、……），避免把 4 反引号围栏误当成
+    # 3 反引号开启符，并要求关闭符与之等长。
+    fence_len = len(fence)
+    while start + fence_len < len(text) and text[start + fence_len] == "`":
+        fence_len += 1
     # 代码从开启符所在行的下一行开始；```python 这样的语言标签以及该行其余
     # 文字都会被丢弃。
-    after = text[start + len(fence):]
+    after = text[start + fence_len:]
     first_nl = after.find("\n")
     if first_nl == -1:
         return None                      # 只有开启符没有正文——视为无代码
     inner = []
     for line in after[first_nl + 1:].splitlines():
-        # 关闭条件：以三个及以上反引号开头，且该行其余部分为空（裸 ``` 行），
-        # 或同行的只是文字（模型偶尔会滑成 `` ``` Done! ``）。脚本内部像
-        # ```markdown 这样的语言标签行要当作代码保留。（已知限制：docstring 里的
-        # 裸 ``` 行仍会被提前当作关闭。）
+        # 关闭符：该行开头的反引号连串长度与开启符一致，且其后只有文字——
+        # 模型偶尔会滑成 `` ``` Done! ``。docstring 内较短的裸 ``` 行，或开启
+        # 符为 3 反引号时出现的 4 反引号围栏，都当作代码保留。
         s = line.strip()
-        if s.startswith(fence) and set(s.split(None, 1)[0]) == {"`"}:
+        run = 0
+        while run < len(s) and s[run] == "`":
+            run += 1
+        if run == fence_len and (len(s) == run or s[run].isspace()):
             break
         inner.append(line)
     return "\n".join(inner).strip() or None  # 空围栏（```\n```）视为无代码
