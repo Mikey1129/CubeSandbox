@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import itertools
 import os
+import sys
 from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
@@ -256,6 +257,7 @@ if __name__ == "__main__":
         stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace (columns month,product,units,price), compute total revenue per month, write the month -> revenue table to /workspace/monthly_revenue.csv, and write the exact string 'stage1-complete' to /workspace/stage1_marker.txt."}]), config=config)
         if not stage1["done"]:
             print("(stage 1 not verified: reviewer never returned DONE)")
+            sys.exit(1)
 
         sandbox.pause()                                   # snapshot VM + rootfs
         # Sandbox.connect() returns a NEW instance; the run_python closure captured

@@ -43,7 +43,7 @@ stages and the run resumable later via checkpointing.
 
 | Component | Version | Notes |
 |---|---|---|
-| langgraph | `>=0.2.50,<2` | `StateGraph`, `START`/`END`, `add_messages` |
+| langgraph | `>=1,<2` | `StateGraph`, `START`/`END`, `add_messages`; 0.2.x is incompatible with langchain-openai 1.x |
 | langchain-openai | `>=1.0,<2.0` | `ChatOpenAI` (any OpenAI-compatible endpoint) |
 | cubesandbox SDK | `>=0.6.0` | `Sandbox.create` / `files.write` / `commands.run` |
 | CubeSandbox platform | `>=0.3.0` | core; higher for optional features (see LangChain guide) |
@@ -379,7 +379,7 @@ if __name__ == "__main__":
 Save the code above as `langgraph_agent_demo.py`, then run it:
 
 ```bash
-pip install "langgraph>=0.2.50,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
+pip install "langgraph>=1,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 
@@ -435,6 +435,7 @@ try:
     stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace (columns month,product,units,price), compute total revenue per month, write the month -> revenue table to /workspace/monthly_revenue.csv, and write the exact string 'stage1-complete' to /workspace/stage1_marker.txt."}]), config=config)
     if not stage1["done"]:
         print("(stage 1 not verified: reviewer never returned DONE)")
+        sys.exit(1)
 
     sandbox.pause()                                   # snapshot VM + rootfs
     # Sandbox.connect() returns a NEW instance; the run_python closure captured

@@ -40,7 +40,7 @@ LangGraph 的 checkpoint 机制与 Cube 的 `pause()` / `connect()` 对接。
 
 | 组件 | 版本 | 说明 |
 |---|---|---|
-| langgraph | `>=0.2.50,<2` | `StateGraph`、`START`/`END`、`add_messages` |
+| langgraph | `>=1,<2` | `StateGraph`、`START`/`END`、`add_messages`；0.2.x 与 langchain-openai 1.x 不兼容 |
 | langchain-openai | `>=1.0,<2.0` | `ChatOpenAI`（任意 OpenAI 兼容端点） |
 | cubesandbox SDK | `>=0.6.0` | `Sandbox.create` / `files.write` / `commands.run` |
 | CubeSandbox 平台 | `>=0.3.0` | 核心；可选特性见 LangChain 指南 |
@@ -356,7 +356,7 @@ if __name__ == "__main__":
 将上面的代码保存为 `langgraph_agent_demo.py`，然后运行：
 
 ```bash
-pip install "langgraph>=0.2.50,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
+pip install "langgraph>=1,<2" "langchain-openai>=1.0,<2.0" "cubesandbox>=0.6.0" python-dotenv
 python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month."
 ```
 
@@ -407,6 +407,7 @@ try:
     stage1 = graph.invoke(stage_input([{"role": "user", "content": "Load sales.csv from /workspace (columns month,product,units,price), compute total revenue per month, write the month -> revenue table to /workspace/monthly_revenue.csv, and write the exact string 'stage1-complete' to /workspace/stage1_marker.txt."}]), config=config)
     if not stage1["done"]:
         print("(stage 1 not verified: reviewer never returned DONE)")
+        sys.exit(1)
 
     sandbox.pause()                                   # 快照 VM + 根文件系统
     # Sandbox.connect() 返回的是新实例；run_python 闭包捕获的是暂停前的旧实例，
