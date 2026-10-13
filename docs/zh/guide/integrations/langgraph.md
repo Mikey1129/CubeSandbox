@@ -385,6 +385,13 @@ python langgraph_agent_demo.py "Load sales.csv, compute total revenue per month.
 
 LangGraph 对图状态做 checkpoint，Cube 对沙箱做快照，二者天然互补，适合长时间、可恢复的 Agent：
 
+> `pause()` **不会**取消沙箱的空闲超时：默认 `on_timeout="kill"` 下，暂停的沙箱一旦空闲超过
+> `timeout` 仍会被销毁。下方可运行 demo 是安全的，因为 `Sandbox.connect()` 紧跟在 `pause()` 之后，
+> 且沙箱以 `timeout=1800` 创建——但真正的「暂停后稍后再恢复」工作流需要
+> `Sandbox.create(..., timeout=NEVER_TIMEOUT)`（`from cubesandbox import NEVER_TIMEOUT`）、省略
+> `timeout`（当你的服务端没有正数默认值时）或设一个足够长的 `timeout`。详见
+> [生命周期](../lifecycle.md)。
+
 > 下面的 `MemorySaver` 把 checkpoint 存在**进程内存**里——适合 demo，但进程重启后即丢失。
 > 如需跨进程恢复，请改用持久化 checkpointer，例如 `langgraph-checkpoint-sqlite` /
 > `-postgres` 提供的 `SqliteSaver` / `PostgresSaver`。
@@ -444,8 +451,9 @@ checkpointer（`SqliteSaver` / `PostgresSaver`）配合使用。
 
 ## 注意事项
 
-- **State 不会随沙箱序列化。** `State` 存在于你的进程（或 LangGraph 的 checkpointer）中；只有 `/workspace`
-  会在 `pause()` / `connect()` 之间保留。任何需要在硬恢复后仍存在的图状态，都要自行持久化。
+- **State 不会随沙箱序列化。** `State` 存在于你的进程（或 LangGraph 的 checkpointer）中；沙箱文件系统
+  在 `pause()` / `connect()` 之间保留（本例把产物放在 `/workspace`），但图的 `State` 不会。任何需要
+  在硬恢复后仍存在的图状态，都要自行持久化。
 - **一个沙箱、一次图运行。** `coder`/`reviewer` 循环复用同一个 MicroVM；不要每个节点新建沙箱——那样每一步
   都要付一次生命周期开销。
 - **工具调用之间状态不保留。** 每次 `commands.run` 都是全新的 `python3` 进程；代码片段所需内容都要内联，

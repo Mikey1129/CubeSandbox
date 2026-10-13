@@ -414,6 +414,14 @@ forever.
 LangGraph checkpoints the graph state; Cube snapshots the sandbox. The two pair naturally for
 long-running, resumable agents:
 
+> `pause()` does **not** cancel the sandbox's idle timeout: with the default `on_timeout="kill"`,
+> a paused sandbox is still destroyed once it idles past `timeout`. The runnable demo below is safe
+> because `Sandbox.connect()` follows `pause()` immediately and the sandbox is created with
+> `timeout=1800` — but a genuinely pause-now / resume-later workflow needs
+> `Sandbox.create(..., timeout=NEVER_TIMEOUT)` (from `cubesandbox import NEVER_TIMEOUT`), an omitted
+> `timeout` (when your server has no positive default), or a long `timeout`. See
+> [Lifecycle](../lifecycle.md).
+
 > `MemorySaver` below keeps checkpoints in **process memory** — fine for a demo, but they are
 > gone when the process restarts. For cross-process resume, use a durable checkpointer such as
 > `SqliteSaver` / `PostgresSaver` from `langgraph-checkpoint-sqlite` / `-postgres`.
@@ -479,8 +487,9 @@ survives within the current process, pair that orchestration layer with a durabl
 ## Caveats
 
 - **State is not serialized with the sandbox.** `State` lives in your process (or the LangGraph
-  checkpointer); only `/workspace` persists across `pause()` / `connect()`. Persist anything the
-  graph needs across a hard resume.
+  checkpointer); the sandbox filesystem survives `pause()` / `connect()` (this example keeps its
+  artifacts in `/workspace`), but the graph `State` does not. Persist anything the graph needs
+  across a hard resume.
 - **One sandbox, one graph run.** The `coder`/`reviewer` loop reuses a single MicroVM; do not create
   a new sandbox per node — you would pay the lifecycle cost every step.
 - **State does not persist across tool calls.** Each `commands.run` is a fresh `python3` process;
