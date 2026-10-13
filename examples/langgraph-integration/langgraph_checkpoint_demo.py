@@ -24,6 +24,16 @@ _llm_key = os.getenv("OPENAI_API_KEY") or os.getenv("TOKENHUB_API_KEY")
 if not _llm_key:
     raise SystemExit("Missing LLM API key")
 
+# If the CubeAPI endpoint uses a self-signed CA, export it so both the
+# control-plane client (requests → REQUESTS_CA_BUNDLE) and the data-plane
+# client (httpx/envd RPCs → SSL_CERT_FILE) trust it. The process-global
+# export also applies to the LLM client; the bundle must include public
+# root CAs (or set CUBE_SSL_CERT_FILE only when the LLM uses the same CA).
+_cube_ssl = os.environ.get("CUBE_SSL_CERT_FILE")
+if _cube_ssl and os.path.isfile(_cube_ssl):
+    os.environ["SSL_CERT_FILE"] = _cube_ssl
+    os.environ["REQUESTS_CA_BUNDLE"] = _cube_ssl
+
 llm = ChatOpenAI(
     model=os.getenv("CHAT_MODEL") or "deepseek-v3",
     api_key=_llm_key,
