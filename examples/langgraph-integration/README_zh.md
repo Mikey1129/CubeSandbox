@@ -46,3 +46,5 @@ python langgraph_checkpoint_demo.py
 | `OPENAI_API_KEY` | ✓ | LLM API key（或 `TOKENHUB_API_KEY`） |
 | `OPENAI_BASE_URL` | — | OpenAI 兼容端点 |
 | `CHAT_MODEL` | — | 模型名（默认 `deepseek-v3`） |
+| `CUBE_PROXY_PORT_HTTP` | — | CubeProxy HTTP 端口（默认 `80`） |
+| `CUBE_SSL_CERT_FILE` | — | HTTPS CubeAPI 端点自签名 CA 的路径 |

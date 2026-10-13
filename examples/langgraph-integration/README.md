@@ -47,3 +47,5 @@ python langgraph_checkpoint_demo.py
 | `OPENAI_API_KEY` | ✓ | LLM API key (or `TOKENHUB_API_KEY`) |
 | `OPENAI_BASE_URL` | — | OpenAI-compatible endpoint |
 | `CHAT_MODEL` | — | Model name (defaults to `deepseek-v3`) |
+| `CUBE_PROXY_PORT_HTTP` | — | CubeProxy HTTP port (defaults to `80`) |
+| `CUBE_SSL_CERT_FILE` | — | Path to a self-signed CA for an HTTPS CubeAPI endpoint |
